@@ -1,0 +1,61 @@
+# Local dev stack. Start it with `npm run dev`, which creates the external
+# networks and sets STACK_ROOT before calling compose.
+name: vibeship-dev
+
+services:
+  caddy:
+    image: caddy:2.11.6
+    command: caddy run --config /etc/caddy/caddy.json
+    ports:
+      - 127.0.0.1:8080:80
+    volumes:
+      - ./dev/caddy/caddy.json:/etc/caddy/caddy.json:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      web: {}
+      caddy-admin:
+        # The admin API binds to this address only, so it is unreachable
+        # from `web`, where project containers live.
+        ipv4_address: 172.31.250.2
+        aliases: [caddy-api]
+    restart: unless-stopped
+
+  # Stands in for RepoFlow. Port 5000 is taken by AirPlay on macOS.
+  registry:
+    image: registry:3.1.1
+    ports:
+      - 127.0.0.1:5050:5000
+    volumes:
+      - registry-data:/var/lib/registry
+    restart: unless-stopped
+
+  vibeship:
+    build:
+      context: .
+      target: dev
+    env_file: .env
+    environment:
+      STACK_ROOT: ${STACK_ROOT:?run the stack with npm run dev}
+    volumes:
+      - ./src:/app/src
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Same path inside and out, because compose resolves bind mounts against host paths.
+      - ${STACK_ROOT}:${STACK_ROOT}
+    networks:
+      - web
+      - caddy-admin
+    depends_on:
+      - caddy
+    restart: unless-stopped
+
+networks:
+  web:
+    external: true
+  caddy-admin:
+    external: true
+
+volumes:
+  caddy-data:
+  caddy-config:
+  registry-data:

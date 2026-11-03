@@ -1,0 +1,23 @@
+{
+  "admin": {
+    "listen": "172.31.250.2:2019",
+    "origins": ["caddy-api:2019"]
+  },
+  "apps": {
+    "http": {
+      "servers": {
+        "vibeship": {
+          "listen": [":80"],
+          "automatic_https": { "disable": true },
+          "routes": [
+            {
+              "@id": "vibeship-ui",
+              "match": [{ "host": ["vibeship.localhost"] }],
+              "handle": [{ "handler": "reverse_proxy", "upstreams": [{ "dial": "vibeship:3000" }] }]
+            }
+          ]
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,292 @@
+import { actorLabel, type RequestContext } from '../actor.ts';
+import type { Db } from '../db/db.ts';
+import { AppError, notFound } from '../errors.ts';
+import { CreateProjectInput, RESERVED_NAMES, UpdateProjectInput } from '../schemas.ts';
+import type { AuditLog } from './audit.ts';
+import { parseInput } from './validate.ts';
+
+export type ProjectKind = 'image' | 'compose';
+export type ProjectStatus = 'created' | 'deploying' | 'running' | 'failed' | 'stopped';
+
+export type ImageSource = {
+  registryId: number | null;
+  imageRef: string;
+  containerPort: number;
+  healthPath: string | null;
+  memLimit: string | null;
+  currentDigest: string | null;
+};
+
+export type ComposeVersion = {
+  id: number;
+  version: number;
+  routedService: string;
+  port: number;
+  note: string | null;
+  createdBy: string;
+  createdAt: string;
+};
+
+export type Project = {
+  id: number;
+  name: string;
+  kind: ProjectKind;
+  hostname: string;
+  status: ProjectStatus;
+  hasWebhook: boolean;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  upstream: string;
+  image: ImageSource | null;
+  /** The latest saved compose version, for compose projects. */
+  compose: ComposeVersion | null;
+};
+
+type ProjectRow = {
+  id: number;
+  name: string;
+  kind: ProjectKind;
+  hostname: string;
+  status: ProjectStatus;
+  webhook_token_hash: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type ImageSourceRow = {
+  registry_id: number | null;
+  image_ref: string;
+  container_port: number;
+  health_path: string | null;
+  mem_limit: string | null;
+  current_digest: string | null;
+};
+
+type ComposeVersionRow = {
+  id: number;
+  version: number;
+  routed_service: string;
+  port: number;
+  note: string | null;
+  created_by: string;
+  created_at: string;
+};
+
+const NOW = `strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`;
+
+export class ProjectService {
+  readonly #db: Db;
+  readonly #audit: AuditLog;
+  readonly #baseDomain: string;
+
+  constructor(deps: { db: Db; audit: AuditLog; baseDomain: string }) {
+    this.#db = deps.db;
+    this.#audit = deps.audit;
+    this.#baseDomain = deps.baseDomain;
+  }
+
+  list(): Project[] {
+    return this.#db.all<ProjectRow>('SELECT * FROM projects ORDER BY name').map((r) => this.#hydrate(r));
+  }
+
+  get(id: number): Project {
+    const row = this.#db.get<ProjectRow>('SELECT * FROM projects WHERE id = ?', id);
+    if (!row) throw notFound(`Project ${id}`);
+    return this.#hydrate(row);
+  }
+
+  getByName(name: string): Project {
+    const row = this.#db.get<ProjectRow>('SELECT * FROM projects WHERE name = ?', name);
+    if (!row) throw notFound(`Project "${name}"`);
+    return this.#hydrate(row);
+  }
+
+  create(ctx: RequestContext, rawInput: unknown): Project {
+    const input = parseInput(CreateProjectInput, rawInput);
+    const hostname = this.#checkHostname(input.hostname ?? `${input.name}.${this.#baseDomain}`);
+    const by = actorLabel(ctx.actor);
+
+    return this.#db.transaction(() => {
+      if (this.#db.get('SELECT 1 FROM projects WHERE name = ?', input.name)) {
+        throw new AppError('conflict', `A project named "${input.name}" already exists`);
+      }
+      this.#checkHostnameFree(hostname);
+
+      const { lastInsertRowid: id } = this.#db.run(
+        'INSERT INTO projects (name, kind, hostname, created_by) VALUES (?, ?, ?, ?)',
+        input.name, input.kind, hostname, by,
+      );
+
+      let port: number;
+      if (input.kind === 'image') {
+        if (input.registryId != null) this.#checkRegistry(input.registryId);
+        this.#db.run(
+          `INSERT INTO image_sources (project_id, registry_id, image_ref, container_port, health_path, mem_limit)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          id, input.registryId ?? null, input.imageRef, input.containerPort, input.healthPath ?? null, input.memLimit ?? null,
+        );
+        port = input.containerPort;
+      } else {
+        // The compose allowlist validator runs on save from phase 4 on.
+        this.#db.run(
+          `INSERT INTO compose_versions (project_id, version, compose_yaml, routed_service, port, note, created_by)
+           VALUES (?, 1, ?, ?, ?, ?, ?)`,
+          id, input.composeYaml, input.routedService, input.port, input.note ?? null, by,
+        );
+        port = input.port;
+      }
+
+      this.#db.run(
+        'INSERT INTO routes (project_id, hostname, upstream) VALUES (?, ?, ?)',
+        id, hostname, upstream(input.name, port),
+      );
+      this.#audit.record(ctx, 'project.create', `project:${id}`, { name: input.name, kind: input.kind, hostname });
+      return this.get(id);
+    });
+  }
+
+  update(ctx: RequestContext, id: number, rawInput: unknown): Project {
+    const input = parseInput(UpdateProjectInput, rawInput);
+
+    return this.#db.transaction(() => {
+      const project = this.get(id);
+      const { hostname: newHostname, ...imageFields } = input;
+      if (project.kind === 'compose' && Object.keys(imageFields).length > 0) {
+        throw new AppError('validation', `Only the hostname of a compose project can be changed here; save a new compose version for the rest`);
+      }
+
+      const changes: Record<string, unknown> = {};
+      if (newHostname !== undefined && newHostname !== project.hostname) {
+        const hostname = this.#checkHostname(newHostname);
+        this.#checkHostnameFree(hostname, id);
+        this.#db.run('UPDATE projects SET hostname = ? WHERE id = ?', hostname, id);
+        changes.hostname = hostname;
+      }
+
+      if (project.kind === 'image') {
+        if (imageFields.registryId != null) this.#checkRegistry(imageFields.registryId);
+        const columns = {
+          image_ref: imageFields.imageRef,
+          container_port: imageFields.containerPort,
+          registry_id: imageFields.registryId,
+          health_path: imageFields.healthPath,
+          mem_limit: imageFields.memLimit,
+        };
+        for (const [column, value] of Object.entries(columns)) {
+          if (value === undefined) continue;
+          // Column names come from the fixed map above, never from input.
+          this.#db.run(`UPDATE image_sources SET ${column} = ? WHERE project_id = ?`, value, id);
+          changes[column] = value;
+        }
+      }
+
+      if (Object.keys(changes).length > 0) {
+        this.#db.run(`UPDATE projects SET updated_at = ${NOW} WHERE id = ?`, id);
+        this.#syncRoute(id);
+        this.#audit.record(ctx, 'project.update', `project:${id}`, { name: project.name, changes });
+      }
+      return this.get(id);
+    });
+  }
+
+  /** Removes the project's rows. Stopping containers and removing the Caddy route arrive with the deploy engine. */
+  delete(ctx: RequestContext, id: number): void {
+    this.#db.transaction(() => {
+      const project = this.get(id);
+      this.#db.run('DELETE FROM projects WHERE id = ?', id);
+      this.#audit.record(ctx, 'project.delete', `project:${id}`, { name: project.name, hostname: project.hostname });
+    });
+  }
+
+  /** Keeps the project's route row in step with its hostname and port. */
+  #syncRoute(id: number): void {
+    const p = this.get(id);
+    const port = p.image?.containerPort ?? p.compose?.port;
+    if (port === undefined) throw new Error(`Project ${id} has no port`);
+    this.#db.run('UPDATE routes SET hostname = ?, upstream = ? WHERE project_id = ?', p.hostname, upstream(p.name, port), id);
+  }
+
+  /**
+   * Hostnames must be one label under the base domain, because the TLS
+   * certificate covers `*.<base domain>` only.
+   */
+  #checkHostname(hostname: string): string {
+    const suffix = `.${this.#baseDomain}`;
+    const label = hostname.endsWith(suffix) ? hostname.slice(0, -suffix.length) : null;
+    if (!label || !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) {
+      throw new AppError('validation', `hostname must be a single label under ${this.#baseDomain}, like app${suffix}`);
+    }
+    if ((RESERVED_NAMES as readonly string[]).includes(label)) {
+      throw new AppError('validation', `hostname ${hostname} is reserved`);
+    }
+    return hostname;
+  }
+
+  #checkHostnameFree(hostname: string, exceptProjectId?: number): void {
+    const taken = this.#db.get<{ project_id: number }>('SELECT project_id FROM routes WHERE hostname = ?', hostname);
+    if (taken && taken.project_id !== exceptProjectId) {
+      throw new AppError('conflict', `Hostname ${hostname} is already used by another project`);
+    }
+  }
+
+  #checkRegistry(registryId: number): void {
+    if (!this.#db.get('SELECT 1 FROM registries WHERE id = ?', registryId)) {
+      throw new AppError('validation', `Registry ${registryId} does not exist`);
+    }
+  }
+
+  #hydrate(row: ProjectRow): Project {
+    const route = this.#db.get<{ upstream: string }>('SELECT upstream FROM routes WHERE project_id = ? ORDER BY id LIMIT 1', row.id);
+    const image = row.kind === 'image'
+      ? this.#db.get<ImageSourceRow>('SELECT * FROM image_sources WHERE project_id = ?', row.id)
+      : undefined;
+    const compose = row.kind === 'compose'
+      ? this.#db.get<ComposeVersionRow>(
+          `SELECT id, version, routed_service, port, note, created_by, created_at
+           FROM compose_versions WHERE project_id = ? ORDER BY version DESC LIMIT 1`,
+          row.id,
+        )
+      : undefined;
+
+    return {
+      id: row.id,
+      name: row.name,
+      kind: row.kind,
+      hostname: row.hostname,
+      status: row.status,
+      hasWebhook: row.webhook_token_hash !== null,
+      createdBy: row.created_by,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      upstream: route?.upstream ?? '',
+      image: image
+        ? {
+            registryId: image.registry_id,
+            imageRef: image.image_ref,
+            containerPort: image.container_port,
+            healthPath: image.health_path,
+            memLimit: image.mem_limit,
+            currentDigest: image.current_digest,
+          }
+        : null,
+      compose: compose
+        ? {
+            id: compose.id,
+            version: compose.version,
+            routedService: compose.routed_service,
+            port: compose.port,
+            note: compose.note,
+            createdBy: compose.created_by,
+            createdAt: compose.created_at,
+          }
+        : null,
+    };
+  }
+}
+
+/** Caddy reaches the routed container through its `<project>` alias on `web`. */
+function upstream(name: string, port: number): string {
+  return `${name}:${port}`;
+}

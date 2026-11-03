@@ -1,0 +1,28 @@
+{
+  "name": "vibeship",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hosted deploy portal for vibe-coded apps",
+  "type": "module",
+  "engines": {
+    "node": ">=26"
+  },
+  "scripts": {
+    "start": "node src/server.ts",
+    "dev": "scripts/dev.sh",
+    "dev:down": "scripts/dev.sh down",
+    "typecheck": "tsc",
+    "test": "node --test 'test/**/*.test.ts'",
+    "check": "npm run typecheck && npm test",
+    "gen-key": "node src/crypto/master-key.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.6",
+    "hono": "^4.13.16",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2"
+  }
+}

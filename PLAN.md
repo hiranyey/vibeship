@@ -17,25 +17,25 @@ Phases 5 and 6 both sit on top of the service layer from phases 1 to 4 and can b
 
 ## Phase 0: Skeleton and dev stack
 
-- [ ] Repo setup: Node 26, TypeScript, Hono, Zod, `node:test`, and an `npm test` script.
-- [ ] Config loaded from `.env`: `STACK_ROOT`, `BASE_DOMAIN`, `TLS_MODE`, OIDC settings, master key path.
-- [ ] `Dockerfile` on `node:26-slim` with the Docker CLI and compose plugin.
-- [ ] `compose.dev.yaml` with Caddy, `registry:2` on `localhost:5000`, and Vibeship running `node --watch` with the source mounted.
-- [ ] The `web` and `caddy-admin` networks, the Docker socket mount, and `STACK_ROOT` bound at the same path.
-- [ ] Caddy base config: admin API on `caddy-admin` only, plain HTTP on `127.0.0.1:8080`, and a static route for `vibeship.localhost`.
+- [x] Repo setup: Node 26, TypeScript, Hono, Zod, `node:test`, and an `npm test` script.
+- [x] Config loaded from `.env`: `STACK_ROOT`, `BASE_DOMAIN`, `TLS_MODE`, `MASTER_KEY`, OIDC settings.
+- [x] `Dockerfile` on `node:26-slim` with the Docker CLI and compose plugin.
+- [x] `compose.dev.yaml` with Caddy, `registry:3` on `localhost:5050`, and Vibeship running `node --watch` with the source mounted.
+- [x] The `web` and `caddy-admin` networks, the Docker socket mount, and `STACK_ROOT` bound at the same path.
+- [x] Caddy base config: admin API on `caddy-admin` only, plain HTTP on `127.0.0.1:8080`, and a static route for `vibeship.localhost`.
 
 **Done when** `npm run dev` serves a placeholder page at `http://vibeship.localhost:8080`, and `npm test` runs an empty suite.
 
 ## Phase 1: Data and core services
 
-- [ ] Migration runner for numbered `.sql` files on boot, with WAL mode on.
-- [ ] First migration with every table in the spec's data model.
-- [ ] A thin wrapper around `DatabaseSync` with prepared statements, and no ORM.
-- [ ] `master.key` generated if missing, and AES-256-GCM helpers to encrypt and decrypt env values and registry tokens.
-- [ ] `audit_log` writer that every service call goes through, with actor types user, token and system.
-- [ ] Zod schemas for projects, env vars, deploys and tokens, shared by the API and MCP later.
-- [ ] Project service: create, read, update and delete, slug rules, reserved names (`caddy`, `vibeship`, `web`), unique hostnames.
-- [ ] Env service: set and unset values; secret values are write-only.
+- [x] Migration runner for numbered `.sql` files on boot, with WAL mode on.
+- [x] First migration with every table in the spec's data model.
+- [x] A thin wrapper around `DatabaseSync` with prepared statements, and no ORM.
+- [x] `MASTER_KEY` read from `.env` (`npm run gen-key` prints one, `npm run dev` fills it in), and AES-256-GCM helpers to encrypt and decrypt env values and registry tokens.
+- [x] `audit_log` writer that every service call goes through, with actor types user, token and system.
+- [x] Zod schemas for projects, env vars, deploys and tokens, shared by the API and MCP later.
+- [x] Project service: create, read, update and delete, slug rules, reserved names (`caddy`, `vibeship`, `web`), unique hostnames.
+- [x] Env service: set and unset values; secret values are write-only.
 
 **Done when** unit tests cover migrations on `:memory:`, encryption round trips, slug and reserved-name rules, and the audit log.
 
@@ -81,6 +81,7 @@ Phases 5 and 6 both sit on top of the service layer from phases 1 to 4 and can b
 - [ ] Allowlist validator for compose YAML: allowed service keys, allowed volumes, allowed top-level keys, and an error that names the offending key.
 - [ ] Unit tests with a table of good YAML and malicious YAML, covering every rejected key.
 - [ ] Patching: force the project name, attach the routed service to `web` with the `<project>` alias, and keep other services off `web`.
+- [ ] Reject a routed service whose name is reserved, since compose also adds the service name as an alias on `web`.
 - [ ] `compose_versions`: save numbered versions with the routed service and port.
 - [ ] Deploy compose projects through the same steps as image projects, with `docker compose pull` instead of pulling by digest.
 - [ ] Fixture `compose-two-apps`: two projects that both have `app` and `db` services.
