@@ -305,3 +305,38 @@ test('tokens can be created, listed and revoked through the API, and the new one
   assert.equal((await h.call('DELETE', `/api/tokens/${created.apiToken.id}`, { as: 'admin' })).status, 200);
   assert.equal((await use()).status, 401);
 });
+
+test('compose versions through the API: saved with deploy scope, refused naming the key, then deployed', async (t) => {
+  const h = harness(t);
+  h.fakeDocker.push('nginx:1.29', 'healthy');
+  const created = await h.call('POST', '/api/projects', { as: 'deploy', body: composeProject() });
+  assert.equal(created.status, 201);
+
+  const evil = await h.call('POST', '/api/projects/blog/compose', {
+    as: 'deploy',
+    body: { composeYaml: 'services:\n  app:\n    image: x\n    volumes: ["/var/run/docker.sock:/var/run/docker.sock"]\n', routedService: 'app', port: 80 },
+  });
+  assert.equal(evil.status, 400);
+  const err = (await evil.json() as { error: { message: string; path: string } }).error;
+  assert.equal(err.path, 'services.app.volumes[0]');
+  assert.match(err.message, /services\.app\.volumes\[0\]: bind mounts may only use \.\/data/);
+
+  const body = { composeYaml: composeProject().composeYaml, routedService: 'app', port: 80, note: 'v2' };
+  assert.equal((await h.call('POST', '/api/projects/blog/compose', { as: 'read', body })).status, 403);
+  const v2 = await h.call('POST', '/api/projects/blog/compose', { as: 'deploy', body });
+  assert.equal(v2.status, 201);
+  assert.equal((await v2.json() as { version: number }).version, 2);
+  const list = await (await h.call('GET', '/api/projects/blog/compose', { as: 'read' })).json() as Array<{ version: number }>;
+  assert.deepEqual(list.map((v) => v.version), [2, 1]);
+  const one = await (await h.call('GET', '/api/projects/blog/compose/1', { as: 'read' })).json() as { composeYaml: string };
+  assert.equal(one.composeYaml, composeProject().composeYaml);
+  assert.equal((await h.call('GET', '/api/projects/blog/compose/9', { as: 'read' })).status, 404);
+
+  const d = await (await h.call('POST', '/api/projects/blog/deploy', { as: 'deploy', body: { composeVersion: 1 } })).json() as { id: number };
+  await h.queue.idle();
+  assert.equal(h.deploys.get(d.id).status, 'healthy');
+  assert.equal(h.deploys.get(d.id).composeVersionId, h.projects.getComposeVersion(h.projects.getByName('blog').id, 1).id);
+
+  h.fakeDocker.logLines.set('blog-blog-1', [{ stream: 'stdout', line: 'compose app up' }]);
+  assert.deepEqual(await (await h.call('GET', '/api/projects/blog/logs', { as: 'read' })).json(), [{ stream: 'stdout', line: 'compose app up' }]);
+});

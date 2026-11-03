@@ -28,8 +28,13 @@ export type ComposeTarget = {
 export interface DockerRunner {
   /** Pulls an image by tag or digest, returning the digest it resolved to. */
   pull(ref: string, auth: RegistryAuth | null, onLine: LineSink): Promise<string>;
+  /** `docker compose config`: Docker's own check of the project's compose file. Throws if it is invalid. */
+  composeConfig(target: ComposeTarget, onLine: LineSink): Promise<void>;
+  /** Pulls every image in the project's compose file, with credentials for any registries that have them. */
+  composePull(target: ComposeTarget, auths: RegistryAuth[], onLine: LineSink): Promise<void>;
   composeUp(target: ComposeTarget, onLine: LineSink): Promise<void>;
-  composeDown(target: ComposeTarget, onLine: LineSink): Promise<void>;
+  /** Stops and removes the project's containers, and its named volumes too when `volumes` is set. */
+  composeDown(target: ComposeTarget, onLine: LineSink, opts?: { volumes?: boolean }): Promise<void>;
   /**
    * Sends a container's log lines to `onLine`, oldest first: the last `tail`
    * lines, then new ones as they come when `follow` is set, until the

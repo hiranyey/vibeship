@@ -1,0 +1,23 @@
+# Two compose projects are created from this same file (see the integration
+# tests). Both have services called `app` and `db`, and each `app` must reach
+# its own `db`: only the routed `app` joins the shared `web` network, as
+# `<project>`, while `db` stays on the project's private network.
+#
+# DB_LABEL is an env var set on each project; compose fills it in from the
+# project's .env.
+services:
+  app:
+    image: localhost:5050/fixtures/app:hello
+    environment:
+      MODE: relay
+      RELAY_URL: http://db:8080/
+    depends_on: [db]
+  db:
+    image: localhost:5050/fixtures/app:hello
+    environment:
+      VERSION: ${DB_LABEL}
+    volumes:
+      - ./data:/data
+      - dbdata:/var/lib/db
+volumes:
+  dbdata:

@@ -81,13 +81,14 @@ Phases 5 and 6 both sit on top of the service layer from phases 1 to 4 and can b
 
 ## Phase 4: Compose projects
 
-- [ ] Allowlist validator for compose YAML: allowed service keys, allowed volumes, allowed top-level keys, and an error that names the offending key.
-- [ ] Unit tests with a table of good YAML and malicious YAML, covering every rejected key.
-- [ ] Patching: force the project name, attach the routed service to `web` with the `<project>` alias, and keep other services off `web`.
-- [ ] Reject a routed service whose name is reserved, since compose also adds the service name as an alias on `web`.
-- [ ] `compose_versions`: save numbered versions with the routed service and port, through `POST /api/projects/:id/compose`.
-- [ ] Deploy compose projects through the same steps as image projects, with `docker compose pull` instead of pulling by digest.
-- [ ] Fixture `compose-two-apps`: two projects that both have `app` and `db` services.
+- [x] Allowlist validator for compose YAML: allowed service keys, allowed volumes, allowed top-level keys, and an error that names the offending key (`src/compose/validate.ts`). The YAML is parsed, checked and written out again from the parsed value, so YAML tags and merge keys can't hide anything.
+- [x] Unit tests with a table of good YAML and malicious YAML, covering every rejected key.
+- [x] Patching: force the project name, attach the routed service to `web` with the `<project>` alias, and keep other services off `web`.
+- [x] A routed service can't shadow a reserved name or another project: it is renamed to the project name in the written file, keeping its own name as an alias on the project's networks only.
+- [x] `compose_versions`: save numbered versions with the routed service, port and optional health path, through `POST /api/projects/:id/compose`.
+- [x] Deploy compose projects through the same steps as image projects, with `docker compose config` and `docker compose pull` instead of pulling by digest. Any saved version can be deployed again by number.
+- [x] Docker commands run with a minimal environment, so compose can't interpolate `MASTER_KEY` into a container, and `$` is refused where interpolation could change a mount, port or network.
+- [x] Fixture `compose-two-apps`: two projects that both have `app` and `db` services.
 
 **Done when** malicious YAML is rejected, both `compose-two-apps` projects route correctly through their aliases, and a broken compose version brings back the last healthy one.
 

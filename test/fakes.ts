@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { parse } from 'yaml';
 import type { CaddyApi, RouteSpec } from '../src/caddy/client.ts';
 import type { HttpProbe } from '../src/deploy/health.ts';
 import { parseImageRef } from '../src/docker/image-ref.ts';
@@ -10,7 +11,7 @@ import type { ComposeTarget, ContainerState, DockerRunner, LineSink, RegistryAut
 export type Behavior = 'healthy' | 'crash' | 'unhealthy' | 'never-starts';
 
 type Image = { repository: string; digest: string; behavior: Behavior };
-type Container = { image: string; behavior: Behavior };
+type Container = { image: string; behavior: Behavior; project: string };
 
 /**
  * A pretend Docker with a built-in registry. Containers behave as their
@@ -24,6 +25,10 @@ export class FakeDocker implements DockerRunner {
   readonly pulls: Array<{ ref: string; auth: RegistryAuth | null }> = [];
   /** Lets a test pause inside composeUp, e.g. to observe a deploy mid-flight. */
   onComposeUp: ((target: ComposeTarget) => Promise<void>) | null = null;
+  /** Set to make `composeConfig` fail with this message. */
+  configError: string | null = null;
+  /** The compose.yaml each project was last started or pulled with. */
+  readonly composeFiles = new Map<string, string>();
 
   /** Publishes an image under `repo:tag` and returns its digest. */
   push(refWithTag: string, behavior: Behavior): string {
@@ -46,19 +51,58 @@ export class FakeDocker implements DockerRunner {
     return image.digest;
   }
 
+  /** The image a tag or digest reference points at, if it was pushed. */
+  #resolve(ref: string): Image | undefined {
+    const at = ref.indexOf('@');
+    if (at >= 0) {
+      const image = this.#byDigest.get(ref.slice(at + 1));
+      return image?.repository === ref.slice(0, at) ? image : undefined;
+    }
+    const { repository, tag } = parseImageRef(ref);
+    return this.#tags.get(`${repository}:${tag}`);
+  }
+
+  /** Each service in the project's compose file: its container name and image. */
+  #services(target: ComposeTarget): Array<{ container: string; image: string }> {
+    const text = readFileSync(join(target.dir, 'compose.yaml'), 'utf8');
+    this.composeFiles.set(target.project, text);
+    const file = parse(text) as { services: Record<string, { image: string; container_name?: string }> };
+    return Object.entries(file.services).map(([name, svc]) => ({
+      container: svc.container_name ?? `${target.project}-${name}-1`,
+      image: svc.image,
+    }));
+  }
+
+  async composeConfig(target: ComposeTarget): Promise<void> {
+    this.calls.push(`config ${target.project}`);
+    if (this.configError) throw new Error(this.configError);
+  }
+
+  async composePull(target: ComposeTarget, _auths: RegistryAuth[], onLine: LineSink): Promise<void> {
+    this.calls.push(`compose-pull ${target.project}`);
+    for (const { image } of this.#services(target)) {
+      if (!this.#resolve(image)) throw new Error(`pull access denied for ${image}`);
+      onLine('stderr', `${image} Pulled`);
+    }
+  }
+
   async composeUp(target: ComposeTarget, onLine: LineSink): Promise<void> {
     this.calls.push(`up ${target.project}`);
     await this.onComposeUp?.(target);
-    const compose = readFileSync(join(target.dir, 'compose.yaml'), 'utf8');
-    const image = /image: "([^"]+)"/.exec(compose)![1]!;
-    const behavior = this.#byDigest.get(image.slice(image.indexOf('@') + 1))!.behavior;
-    this.containers.set(target.project, { image, behavior });
-    onLine('stderr', `Container ${target.project} Started`);
+    const services = this.#services(target);
+    // Like `up --remove-orphans`: containers of services no longer in the file go away.
+    for (const [name, c] of this.containers) if (c.project === target.project) this.containers.delete(name);
+    for (const { container, image } of services) {
+      const found = this.#resolve(image);
+      if (!found) throw new Error(`No such image: ${image}`);
+      this.containers.set(container, { image, behavior: found.behavior, project: target.project });
+      onLine('stderr', `Container ${container} Started`);
+    }
   }
 
-  async composeDown(target: ComposeTarget): Promise<void> {
-    this.calls.push(`down ${target.project}`);
-    this.containers.delete(target.project);
+  async composeDown(target: ComposeTarget, _onLine?: LineSink, opts: { volumes?: boolean } = {}): Promise<void> {
+    this.calls.push(`down ${target.project}${opts.volumes ? ' --volumes' : ''}`);
+    for (const [name, c] of this.containers) if (c.project === target.project) this.containers.delete(name);
   }
 
   /** Log lines per container name, for `containerLogs`. */
@@ -91,7 +135,8 @@ export class FakeDocker implements DockerRunner {
 
   readonly probe: HttpProbe = async (url) => {
     const host = new URL(url).hostname;
-    const c = this.containers.get(host);
+    // `<project>` is an image project's container, or a compose project's routed one.
+    const c = this.containers.get(host) ?? this.containers.get(`${host}-${host}-1`);
     if (!c) return { ok: false, detail: 'ENOTFOUND' };
     return c.behavior === 'healthy' ? { ok: true, detail: 'HTTP 200' } : { ok: false, detail: 'HTTP 500' };
   };

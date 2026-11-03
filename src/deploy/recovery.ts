@@ -5,7 +5,15 @@ import type { DockerRunner } from '../docker/runner.ts';
 import type { AuditLog } from '../services/audit.ts';
 import type { ProjectFiles } from './files.ts';
 
-type Interrupted = { id: number; project_id: number; name: string; image_ref: string; current_digest: string | null };
+type Interrupted = {
+  id: number;
+  project_id: number;
+  name: string;
+  kind: 'image' | 'compose';
+  image_ref: string | null;
+  current_digest: string | null;
+  current_compose_version_id: number | null;
+};
 
 const NOW = `strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`;
 
@@ -23,7 +31,7 @@ export async function recoverInterruptedDeploys(deps: {
 }): Promise<void> {
   const { db, docker, audit, files } = deps;
   const interrupted = db.all<Interrupted>(
-    `SELECT d.id, d.project_id, p.name, i.image_ref, i.current_digest
+    `SELECT d.id, d.project_id, p.name, p.kind, i.image_ref, i.current_digest, p.current_compose_version_id
      FROM deploys d
      JOIN projects p ON p.id = d.project_id
      LEFT JOIN image_sources i ON i.project_id = p.id
@@ -41,20 +49,25 @@ export async function recoverInterruptedDeploys(deps: {
     handled.add(d.project_id);
 
     // Serving correctly means the container runs the last healthy image and isn't crashing.
-    const state = await docker.inspectContainer(d.name).catch(() => null);
-    const expected = d.current_digest ? pinned(d.image_ref, d.current_digest) : null;
-    const serving = state?.status === 'running' && state.health !== 'unhealthy' && state.image === expected;
+    // A compose project's services can't be checked that precisely, so it is always redeployed.
+    let serving = false;
+    if (d.kind === 'image' && d.current_digest && d.image_ref) {
+      const state = await docker.inspectContainer(d.name).catch(() => null);
+      serving = state?.status === 'running' && state.health !== 'unhealthy' && state.image === pinned(d.image_ref, d.current_digest);
+    }
 
     if (serving) {
       db.run(`UPDATE projects SET status = 'running' WHERE id = ?`, d.project_id);
       audit.record(systemContext, 'deploy.recovery_not_needed', `project:${d.project_id}`, { project: d.name });
-    } else if (d.current_digest) {
+    } else if (d.current_digest || d.current_compose_version_id) {
       const { lastInsertRowid } = db.run(
-        `INSERT INTO deploys (project_id, trigger, digest, actor) VALUES (?, 'recovery', ?, 'system')`,
-        d.project_id, d.current_digest,
+        `INSERT INTO deploys (project_id, trigger, digest, compose_version_id, actor) VALUES (?, 'recovery', ?, ?, 'system')`,
+        d.project_id, d.current_digest, d.current_compose_version_id,
       );
       audit.record(systemContext, 'deploy.recovery', `project:${d.project_id}`, {
-        project: d.name, deploy: lastInsertRowid, digest: d.current_digest,
+        project: d.name,
+        deploy: lastInsertRowid,
+        ...(d.kind === 'image' ? { digest: d.current_digest } : { composeVersionId: d.current_compose_version_id }),
       });
     } else {
       // An interrupted first deploy: there is nothing healthy to go back to.

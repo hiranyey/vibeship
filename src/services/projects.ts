@@ -2,7 +2,8 @@ import { actorLabel, type RequestContext } from '../actor.ts';
 import { randomToken, sha256Hex } from '../crypto/tokens.ts';
 import type { Db } from '../db/db.ts';
 import { AppError, notFound } from '../errors.ts';
-import { CreateProjectInput, RESERVED_NAMES, UpdateProjectInput } from '../schemas.ts';
+import { checkCompose, renderComposeProject } from '../compose/validate.ts';
+import { ComposeVersionFields, CreateProjectInput, RESERVED_NAMES, UpdateProjectInput } from '../schemas.ts';
 import type { AuditLog } from './audit.ts';
 import { parseInput } from './validate.ts';
 
@@ -23,6 +24,7 @@ export type ComposeVersion = {
   version: number;
   routedService: string;
   port: number;
+  healthPath: string | null;
   note: string | null;
   createdBy: string;
   createdAt: string;
@@ -42,7 +44,12 @@ export type Project = {
   image: ImageSource | null;
   /** The latest saved compose version, for compose projects. */
   compose: ComposeVersion | null;
+  /** The compose version that last deployed healthy, for compose projects. */
+  deployedComposeVersion: number | null;
 };
+
+/** A compose version with its YAML, as the user wrote it. */
+export type ComposeVersionWithYaml = ComposeVersion & { composeYaml: string };
 
 type ProjectRow = {
   id: number;
@@ -51,6 +58,7 @@ type ProjectRow = {
   hostname: string;
   status: ProjectStatus;
   webhook_token_hash: string | null;
+  current_compose_version_id: number | null;
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -70,6 +78,7 @@ type ComposeVersionRow = {
   version: number;
   routed_service: string;
   port: number;
+  health_path: string | null;
   note: string | null;
   created_by: string;
   created_at: string;
@@ -130,12 +139,7 @@ export class ProjectService {
         );
         port = input.containerPort;
       } else {
-        // The compose allowlist validator runs on save from phase 4 on.
-        this.#db.run(
-          `INSERT INTO compose_versions (project_id, version, compose_yaml, routed_service, port, note, created_by)
-           VALUES (?, 1, ?, ?, ?, ?, ?)`,
-          id, input.composeYaml, input.routedService, input.port, input.note ?? null, by,
-        );
+        this.#insertComposeVersion(id, input.name, 1, input, by);
         port = input.port;
       }
 
@@ -190,6 +194,55 @@ export class ProjectService {
       }
       return this.get(id);
     });
+  }
+
+  /**
+   * Saves a new numbered compose version after checking it against the
+   * allowlist. It goes live on the next deploy.
+   */
+  addComposeVersion(ctx: RequestContext, id: number, rawInput: unknown): ComposeVersionWithYaml {
+    const input = parseInput(ComposeVersionFields, rawInput);
+    return this.#db.transaction(() => {
+      const project = this.get(id);
+      if (project.kind !== 'compose') throw new AppError('validation', 'Only compose projects have compose versions');
+      const next = (project.compose?.version ?? 0) + 1;
+      this.#insertComposeVersion(id, project.name, next, input, actorLabel(ctx.actor));
+      this.#db.run(`UPDATE projects SET updated_at = ${NOW} WHERE id = ?`, id);
+      this.#audit.record(ctx, 'compose.version', `project:${id}`, { name: project.name, version: next, routedService: input.routedService, note: input.note ?? null });
+      return this.getComposeVersion(id, next);
+    });
+  }
+
+  /** Newest first, without the YAML. */
+  listComposeVersions(id: number): ComposeVersion[] {
+    this.get(id);
+    return this.#db
+      .all<ComposeVersionRow>('SELECT * FROM compose_versions WHERE project_id = ? ORDER BY version DESC', id)
+      .map(composeView);
+  }
+
+  getComposeVersion(projectId: number, version: number): ComposeVersionWithYaml {
+    const row = this.#db.get<ComposeVersionRow & { compose_yaml: string }>(
+      'SELECT * FROM compose_versions WHERE project_id = ? AND version = ?', projectId, version,
+    );
+    if (!row) throw notFound(`Compose version ${version}`);
+    return { ...composeView(row), composeYaml: row.compose_yaml };
+  }
+
+  getComposeVersionById(id: number): ComposeVersionWithYaml {
+    const row = this.#db.get<ComposeVersionRow & { compose_yaml: string }>('SELECT * FROM compose_versions WHERE id = ?', id);
+    if (!row) throw notFound(`Compose version #${id}`);
+    return { ...composeView(row), composeYaml: row.compose_yaml };
+  }
+
+  #insertComposeVersion(projectId: number, projectName: string, version: number, input: ComposeVersionFields, by: string): void {
+    // Rendering also checks what only the patch step knows, such as a name clash with the project.
+    renderComposeProject(checkCompose(input.composeYaml, input.routedService), projectName);
+    this.#db.run(
+      `INSERT INTO compose_versions (project_id, version, compose_yaml, routed_service, port, health_path, note, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      projectId, version, input.composeYaml, input.routedService, input.port, input.healthPath ?? null, input.note ?? null, by,
+    );
   }
 
   /**
@@ -268,8 +321,7 @@ export class ProjectService {
       : undefined;
     const compose = row.kind === 'compose'
       ? this.#db.get<ComposeVersionRow>(
-          `SELECT id, version, routed_service, port, note, created_by, created_at
-           FROM compose_versions WHERE project_id = ? ORDER BY version DESC LIMIT 1`,
+          'SELECT * FROM compose_versions WHERE project_id = ? ORDER BY version DESC LIMIT 1',
           row.id,
         )
       : undefined;
@@ -295,19 +347,25 @@ export class ProjectService {
             currentDigest: image.current_digest,
           }
         : null,
-      compose: compose
-        ? {
-            id: compose.id,
-            version: compose.version,
-            routedService: compose.routed_service,
-            port: compose.port,
-            note: compose.note,
-            createdBy: compose.created_by,
-            createdAt: compose.created_at,
-          }
-        : null,
+      compose: compose ? composeView(compose) : null,
+      deployedComposeVersion: row.current_compose_version_id === null
+        ? null
+        : this.#db.get<{ version: number }>('SELECT version FROM compose_versions WHERE id = ?', row.current_compose_version_id)?.version ?? null,
     };
   }
+}
+
+function composeView(r: ComposeVersionRow): ComposeVersion {
+  return {
+    id: r.id,
+    version: r.version,
+    routedService: r.routed_service,
+    port: r.port,
+    healthPath: r.health_path,
+    note: r.note,
+    createdBy: r.created_by,
+    createdAt: r.created_at,
+  };
 }
 
 /** Caddy reaches the routed container through its `<project>` alias on `web`. */

@@ -42,10 +42,13 @@ export const ImageSourceFields = z.object({
 
 export const ComposeVersionFields = z.object({
   composeYaml: z.string().min(1).max(256 * 1024),
+  /** The service Caddy routes to. */
   routedService: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/, 'must be a compose service name'),
   port: Port,
+  healthPath: HealthPath.nullable().optional(),
   note: z.string().max(500).nullable().optional(),
 });
+export type ComposeVersionFields = z.infer<typeof ComposeVersionFields>;
 
 export const CreateProjectInput = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('image'), name: ProjectName, hostname: Hostname.optional() }).extend(ImageSourceFields.shape),
@@ -61,7 +64,11 @@ export const UpdateProjectInput = z
   .refine((v) => Object.keys(v).length > 0, 'nothing to update');
 export type UpdateProjectInput = z.infer<typeof UpdateProjectInput>;
 
-export const EnvKey = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,127}$/, 'must be a valid environment variable name');
+export const EnvKey = z
+  .string()
+  .regex(/^[A-Za-z_][A-Za-z0-9_]{0,127}$/, 'must be a valid environment variable name')
+  // Compose reads these from the project's .env as its own settings, e.g. COMPOSE_FILE.
+  .refine((k) => !/^(COMPOSE|DOCKER)_/i.test(k), 'COMPOSE_* and DOCKER_* names are reserved for Docker');
 const EnvValue = z.string().max(64 * 1024).refine((v) => !v.includes('\0'), 'must not contain NUL');
 
 /** MCP `set_env`: set some keys and unset others, leaving the rest alone. */

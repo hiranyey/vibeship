@@ -2,6 +2,7 @@ import { type Context, Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { z } from 'zod';
 import type { Config } from '../config.ts';
+import { DeployEngine } from '../deploy/engine.ts';
 import type { LineSink } from '../docker/runner.ts';
 import { AppError } from '../errors.ts';
 import type { DeployTrigger } from '../services/deploys.ts';
@@ -81,6 +82,13 @@ export function apiRoutes(deps: { config: Config; services: Services }): Hono<Ap
   app.get('/projects/:id/env', read, (c) => c.json(s.env.list(project(c).id)));
   app.put('/projects/:id/env', deploy, async (c) => c.json(s.env.replace(principal(c).ctx, project(c).id, await body(c))));
 
+  // Compose versions: saving one checks it against the allowlist; it goes live on the next deploy.
+  app.get('/projects/:id/compose', read, (c) => c.json(s.projects.listComposeVersions(project(c).id)));
+  app.post('/projects/:id/compose', deploy, async (c) =>
+    c.json(s.projects.addComposeVersion(principal(c).ctx, project(c).id, await body(c)), 201));
+  app.get('/projects/:id/compose/:version', read, (c) =>
+    c.json(s.projects.getComposeVersion(project(c).id, intParam(c.req.param('version'), 'Compose version'))));
+
   app.get('/projects/:id/deploys', read, (c) => {
     const { limit } = parseInput(ListQuery, c.req.query());
     return c.json(s.deploys.list(project(c).id, limit ?? 20));
@@ -96,15 +104,16 @@ export function apiRoutes(deps: { config: Config; services: Services }): Hono<Ap
     return c.json({ url: `${deps.config.publicUrl}/hooks/deploy/${token}`, project: p }, 201);
   });
 
-  // Container logs: the last `tail` lines as JSON, or a live stream with `Accept: text/event-stream`.
+  // Logs of the routed container: the last `tail` lines as JSON, or a live stream with `Accept: text/event-stream`.
   app.get('/projects/:id/logs', read, async (c) => {
     const p = project(c);
     const q = parseInput(LogsQuery, c.req.query());
-    if (!(await s.docker.inspectContainer(p.name))) throw new AppError('not_found', `${p.name} has no container; deploy it first`);
+    const container = DeployEngine.routedContainer(p);
+    if (!(await s.docker.inspectContainer(container))) throw new AppError('not_found', `${p.name} has no container; deploy it first`);
 
     if (!wantsStream(c)) {
       const lines: Array<{ stream: string; line: string }> = [];
-      await s.docker.containerLogs(p.name, { tail: q.tail, follow: false }, (stream, line) => lines.push({ stream, line }));
+      await s.docker.containerLogs(container, { tail: q.tail, follow: false }, (stream, line) => lines.push({ stream, line }));
       return c.json(lines);
     }
 
@@ -123,7 +132,7 @@ export function apiRoutes(deps: { config: Config; services: Services }): Hono<Ap
         pending = pending.then(() => stream.write(': ping\n\n')).then(() => {}, () => abort.abort());
       }, HEARTBEAT_MS);
       try {
-        await s.docker.containerLogs(p.name, { tail: q.tail, follow, signal: abort.signal }, sink);
+        await s.docker.containerLogs(container, { tail: q.tail, follow, signal: abort.signal }, sink);
         await pending;
         if (!abort.signal.aborted) await stream.writeSSE({ event: 'end', data: '{}' });
       } catch (err) {

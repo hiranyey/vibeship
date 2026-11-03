@@ -30,7 +30,7 @@ test('an interrupted deploy is marked failed and the last healthy version comes 
   const v2 = s.fakeDocker.push(V2_REF, 'healthy');
   // v2 was half started when the restart hit, and another deploy was waiting.
   const cut = s.cutOff(v2);
-  s.fakeDocker.containers.set('hello', { image: `localhost:5050/library/hello@${v2}`, behavior: 'healthy' });
+  s.fakeDocker.containers.set('hello', { image: `localhost:5050/library/hello@${v2}`, behavior: 'healthy', project: 'hello' });
   const waiting = s.db.run(`INSERT INTO deploys (project_id, trigger, digest, actor) VALUES (?, 'api', ?, 'user:1')`, s.id, v2).lastInsertRowid;
 
   await s.recover();
@@ -69,7 +69,7 @@ test('an interrupted first deploy stops the container and marks the project fail
   const v1 = s.fakeDocker.push(REF, 'healthy');
   const { id } = s.projects.create(s.ctx, imageProject());
   s.db.run(`INSERT INTO deploys (project_id, trigger, digest, status, actor) VALUES (?, 'ui', ?, 'running', 'user:1')`, id, v1);
-  s.fakeDocker.containers.set('hello', { image: `localhost:5050/library/hello@${v1}`, behavior: 'healthy' });
+  s.fakeDocker.containers.set('hello', { image: `localhost:5050/library/hello@${v1}`, behavior: 'healthy', project: 'hello' });
 
   await recoverInterruptedDeploys({ db: s.db, docker: s.fakeDocker, audit: s.audit, files: s.files });
   assert.equal(s.fakeDocker.containers.has('hello'), false);

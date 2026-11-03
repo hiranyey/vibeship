@@ -19,6 +19,8 @@ const fixtures = JSON.parse(readFileSync(`${ROOT}.dev/fixtures.json`, 'utf8')) a
 const REPO = fixtures.repository!;
 const HELLO = 'it-hello';
 const PROBE = 'it-probe';
+const TWO = ['it-two-a', 'it-two-b'] as const;
+const PROJECTS = [HELLO, PROBE, ...TWO];
 const VIBESHIP = 'vibeship.localhost';
 
 type Deploy = { id: number; status: string; trigger: string; digest: string | null; failureReason: string | null };
@@ -106,15 +108,13 @@ before(async () => {
   const health = await http(VIBESHIP, 'GET', '/healthz').catch(() => null);
   assert.equal(health?.status, 200, 'The dev stack is not running: start it with `npm run dev`');
   admin = devExec('node', 'src/token-cli.ts', 'integration-tests', 'admin');
-  await apiMaybe('DELETE', `/projects/${HELLO}?deleteData=true`);
-  await apiMaybe('DELETE', `/projects/${PROBE}?deleteData=true`);
+  for (const p of PROJECTS) await apiMaybe('DELETE', `/projects/${p}?deleteData=true`);
   await apiMaybe('POST', '/registries', { name: 'local', url: 'http://localhost:5050' });
   await api('PUT', '/settings/health_timeout_seconds', { value: 15 });
 });
 
 after(async () => {
-  await apiMaybe('DELETE', `/projects/${HELLO}?deleteData=true`);
-  await apiMaybe('DELETE', `/projects/${PROBE}?deleteData=true`);
+  for (const p of PROJECTS) await apiMaybe('DELETE', `/projects/${p}?deleteData=true`);
 });
 
 test('the API needs a token, and each scope is refused above its level', async () => {
@@ -234,4 +234,51 @@ test('drift: a hand edit is flagged until the next deploy rewrites the file', as
   await wait((await deploy(HELLO)).id);
   const after = (await api<Drift>('GET', `/projects/${HELLO}/drift`)).files;
   assert.ok(after.every((f) => f.state === 'ok'));
+});
+
+// Compose projects
+
+const twoApps = readFileSync(`${ROOT}examples/compose-two-apps/compose.yaml`, 'utf8').replaceAll('localhost:5050/fixtures/app', REPO);
+const body = async (host: string, path = '/') => (await http(`${host}.localhost`, 'GET', path)).body.trim();
+
+test('malicious compose YAML is refused with the offending key named', async () => {
+  const res = await http(VIBESHIP, 'POST', '/api/projects', {
+    token: admin,
+    body: { kind: 'compose', name: TWO[0], routedService: 'app', port: 8080, composeYaml: 'services:\n  app:\n    image: alpine\n    privileged: true\n' },
+  });
+  assert.equal(res.status, 400);
+  assert.match(res.json<{ error: { message: string } }>().error.message, /^services\.app\.privileged: is not allowed/);
+  assert.equal((await http(VIBESHIP, 'GET', `/api/projects/${TWO[0]}`, { token: admin })).status, 404);
+});
+
+test('two compose projects with the same service names each route to their own app and db', async () => {
+  for (const [i, name] of TWO.entries()) {
+    await api('POST', '/projects', { kind: 'compose', name, composeYaml: twoApps, routedService: 'app', port: 8080, healthPath: '/health' });
+    await api('PUT', `/projects/${name}/env`, [{ key: 'DB_LABEL', value: `db-${'ab'[i]}` }]);
+    const d = await wait((await deploy(name)).id);
+    assert.equal(d.status, 'healthy', d.failureReason ?? '');
+  }
+  assert.equal(await body(TWO[0]), 'relay -> hello from db-a (hello)');
+  assert.equal(await body(TWO[1]), 'relay -> hello from db-b (hello)');
+  assert.equal((await api<{ deployedComposeVersion: number }>('GET', `/projects/${TWO[0]}`)).deployedComposeVersion, 1);
+});
+
+test('a broken compose version brings back the last healthy one', async () => {
+  const broken = twoApps.replace('MODE: relay', 'MODE: crash');
+  const v = await api<{ version: number }>('POST', `/projects/${TWO[0]}/compose`, { composeYaml: broken, routedService: 'app', port: 8080, healthPath: '/health', note: 'broken' });
+  assert.equal(v.version, 2);
+  const d = await wait((await deploy(TWO[0])).id);
+  assert.equal(d.status, 'failed');
+  const p = await api<{ status: string; deployedComposeVersion: number }>('GET', `/projects/${TWO[0]}`);
+  assert.deepEqual([p.status, p.deployedComposeVersion], ['running', 1]);
+  assert.equal(await body(TWO[0]), 'relay -> hello from db-a (hello)');
+});
+
+test('a compose app cannot read Vibeship secrets through interpolation, nor reach another project\'s db', async () => {
+  const nosy = twoApps
+    .replace('RELAY_URL: http://db:8080/', `RELAY_URL: http://${TWO[1]}-db-1:8080/\n      LEAK: \${MASTER_KEY:-unset}`);
+  await api('POST', `/projects/${TWO[0]}/compose`, { composeYaml: nosy, routedService: 'app', port: 8080, healthPath: '/health' });
+  assert.equal((await wait((await deploy(TWO[0])).id)).status, 'healthy');
+  assert.equal(JSON.parse(await body(TWO[0], '/env/LEAK')).value, 'unset');
+  assert.match(await body(TWO[0]), /^relay failed: (ENOTFOUND|EAI_AGAIN)/);
 });

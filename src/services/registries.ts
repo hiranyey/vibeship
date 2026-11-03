@@ -86,6 +86,13 @@ export class RegistryService {
     };
   }
 
+  /** Credentials for every registry that has them, for `docker compose pull`. */
+  allAuths(): RegistryAuth[] {
+    return this.#db
+      .all<RegistryRow>('SELECT * FROM registries WHERE username IS NOT NULL AND token_encrypted IS NOT NULL ORDER BY id')
+      .map((r) => ({ host: registryHost(r.url), username: r.username!, password: this.#box.open(r.token_encrypted!, `registry:${r.id}`) }));
+  }
+
   #view(r: RegistryRow): Registry {
     return { id: r.id, name: r.name, url: r.url, host: registryHost(r.url), username: r.username, hasToken: r.token_encrypted !== null };
   }

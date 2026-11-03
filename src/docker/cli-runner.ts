@@ -8,6 +8,30 @@ import type { ComposeTarget, ContainerState, DockerRunner, LineSink, RegistryAut
 
 type RunResult = { code: number; stdout: string[]; stderr: string[] };
 
+/**
+ * The only variables `docker` sees from Vibeship's environment. Compose
+ * interpolates `${VAR}` in compose files from its environment, so passing
+ * everything would hand MASTER_KEY to any compose file that asks for it.
+ */
+const PASSED_ENV = ['PATH', 'HOME', 'DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_CERT_PATH', 'DOCKER_TLS_VERIFY', 'DOCKER_CONFIG'];
+
+export function dockerEnv(extra: NodeJS.ProcessEnv = {}, from: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const k of PASSED_ENV) if (from[k] !== undefined) env[k] = from[k];
+  return { ...env, ...extra };
+}
+
+/** Writes registry credentials into a throwaway DOCKER_CONFIG, so they never persist on disk. */
+function withAuths<T>(auths: RegistryAuth[], fn: (env: NodeJS.ProcessEnv) => Promise<T>): Promise<T> {
+  if (auths.length === 0) return fn({});
+  const dir = mkdtempSync(join(tmpdir(), 'vibeship-docker-'));
+  const config = {
+    auths: Object.fromEntries(auths.map((a) => [a.host, { auth: Buffer.from(`${a.username}:${a.password}`).toString('base64') }])),
+  };
+  writeFileSync(join(dir, 'config.json'), JSON.stringify(config), { mode: 0o600 });
+  return fn({ DOCKER_CONFIG: dir }).finally(() => rmSync(dir, { recursive: true, force: true }));
+}
+
 /** Runs a `docker` command, streaming each output line to `onLine` and collecting it. */
 function docker(
   args: string[],
@@ -15,7 +39,7 @@ function docker(
 ): Promise<RunResult> {
   return new Promise((resolve, reject) => {
     const child = spawn('docker', args, {
-      env: { ...process.env, ...opts.env },
+      env: dockerEnv(opts.env),
       stdio: ['ignore', 'pipe', 'pipe'],
       signal: opts.signal,
       killSignal: 'SIGTERM',
@@ -58,15 +82,9 @@ function composeArgs(t: ComposeTarget, ...rest: string[]): string[] {
 
 export class CliDockerRunner implements DockerRunner {
   async pull(ref: string, auth: RegistryAuth | null, onLine: LineSink): Promise<string> {
-    // Credentials go in a throwaway DOCKER_CONFIG so they never persist on disk.
-    const configDir = auth ? mkdtempSync(join(tmpdir(), 'vibeship-docker-')) : null;
-    try {
-      if (auth && configDir) {
-        const token = Buffer.from(`${auth.username}:${auth.password}`).toString('base64');
-        writeFileSync(join(configDir, 'config.json'), JSON.stringify({ auths: { [auth.host]: { auth: token } } }), { mode: 0o600 });
-      }
+    return withAuths(auth ? [auth] : [], async (env) => {
       const args = ['pull', ref];
-      const r = await docker(args, { onLine, env: configDir ? { DOCKER_CONFIG: configDir } : {} });
+      const r = await docker(args, { onLine, env });
       if (r.code !== 0) throw failure(args, r);
 
       const pinned = /@(sha256:[a-f0-9]{64})$/.exec(ref)?.[1];
@@ -74,9 +92,21 @@ export class CliDockerRunner implements DockerRunner {
       const reported = r.stdout.map((l) => /^Digest: (sha256:[a-f0-9]{64})$/.exec(l)?.[1]).find(Boolean);
       if (reported) return reported;
       return await this.#repoDigest(ref);
-    } finally {
-      if (configDir) rmSync(configDir, { recursive: true, force: true });
-    }
+    });
+  }
+
+  async composeConfig(target: ComposeTarget, onLine: LineSink): Promise<void> {
+    const args = composeArgs(target, 'config', '--quiet');
+    const r = await docker(args, { onLine });
+    if (r.code !== 0) throw failure(args, r);
+  }
+
+  async composePull(target: ComposeTarget, auths: RegistryAuth[], onLine: LineSink): Promise<void> {
+    await withAuths(auths, async (env) => {
+      const args = composeArgs(target, 'pull');
+      const r = await docker(args, { onLine, env });
+      if (r.code !== 0) throw failure(args, r);
+    });
   }
 
   async #repoDigest(ref: string): Promise<string> {
@@ -96,8 +126,8 @@ export class CliDockerRunner implements DockerRunner {
     if (r.code !== 0) throw failure(args, r);
   }
 
-  async composeDown(target: ComposeTarget, onLine: LineSink): Promise<void> {
-    const args = composeArgs(target, 'down', '--remove-orphans');
+  async composeDown(target: ComposeTarget, onLine: LineSink, opts: { volumes?: boolean } = {}): Promise<void> {
+    const args = composeArgs(target, 'down', '--remove-orphans', ...(opts.volumes ? ['--volumes'] : []));
     const r = await docker(args, { onLine });
     if (r.code !== 0) throw failure(args, r);
   }

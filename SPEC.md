@@ -81,11 +81,12 @@ Each project's routed container joins `web` with the network alias `<project>`, 
 | Compose file | Generated from a template | User YAML, validated and patched |
 | Route | Hostname plus container port | Hostname plus service and port |
 
-For compose projects Vibeship validates the YAML with `docker compose config`, forces the project name, and attaches the routed service to `web` with the `<project>` alias. Validation is an allowlist, not a denylist, because Vibeship holds the Docker socket and a permissive compose file amounts to root on the host:
+For compose projects Vibeship checks the YAML against an allowlist when it is saved, then at deploy writes it out again from the parsed value (never the user's text), forces the project name, and attaches the routed service to `web` with the `<project>` alias; `docker compose config` checks the result before anything starts. The routed service is renamed to the project name in the written file, keeping its own name as an alias on the project's own networks, so whatever it is called it can't shadow Caddy, Vibeship or another project on `web`. Validation is an allowlist, not a denylist, because Vibeship holds the Docker socket and a permissive compose file amounts to root on the host:
 
 - Allowed service keys: `image`, `command`, `entrypoint`, `environment`, `env_file` (the project's `.env` only), `ports` (bound to `127.0.0.1` only), `volumes`, `depends_on`, `healthcheck`, `restart`, `working_dir`, `user`, `labels`, `mem_limit`, `cpus`, `networks` (project networks only).
-- Volumes must be bind mounts under the project's `data/` folder or plain named volumes with no `driver` or `driver_opts`.
-- Allowed top-level keys: `services`, `volumes`, `networks` (with no external networks other than `web`, which Vibeship adds itself).
+- Volumes must be bind mounts of the project's `./data` folder itself or plain named volumes with no `driver`, `driver_opts`, `name` or `external`. Paths inside `data/` are refused, because a container could plant a symlink there that a later deploy would follow out to the host.
+- Allowed top-level keys: `services`, `volumes`, `networks` (with no external networks other than `web`, which Vibeship adds itself). `version` and `x-` blocks are accepted and dropped.
+- `$` (variable interpolation) is refused in `volumes`, `ports` and `networks`, since compose resolves it after the check. Elsewhere it is allowed and filled in from the project's `.env` only: `docker` runs with a minimal environment, so `MASTER_KEY` can't be interpolated, and env var names starting with `COMPOSE_` or `DOCKER_` are refused because compose reads those as its own settings.
 - Anything else is rejected with the offending key named, including `privileged`, `network_mode`, `pid`, `ipc`, `cap_add`, `devices`, `security_opt`, `userns_mode`, `build` and `extends`.
 
 ## Deploy flow
@@ -144,7 +145,7 @@ The endpoint uses `@modelcontextprotocol/sdk` over Streamable HTTP at `https://v
 | `GET /api/projects`, `POST /api/projects` | List and create projects |
 | `GET\|PATCH\|DELETE /api/projects/:id` | Read, edit and delete one project |
 | `PUT /api/projects/:id/env` | Replace env vars |
-| `POST /api/projects/:id/compose` | New compose version |
+| `GET\|POST /api/projects/:id/compose` | List compose versions, or save a new one |
 | `POST /api/projects/:id/deploy` | Start a deploy |
 | `GET /api/deploys/:id/logs` | Deploy logs, streamed with server-sent events |
 | `GET /api/projects/:id/logs` | Container logs, streamed |

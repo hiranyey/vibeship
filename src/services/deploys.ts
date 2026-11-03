@@ -89,13 +89,22 @@ export class DeployService {
     const input = parseInput(DeployInput, rawInput ?? {});
     const deploy = this.#db.transaction(() => {
       const project = this.#projects.get(projectId);
-      if (project.kind === 'compose') throw new AppError('validation', 'Compose projects can not be deployed yet');
-      if (input.composeVersion) throw new AppError('validation', 'composeVersion only applies to compose projects');
+      let composeVersionId: number | null = null;
+      if (project.kind === 'compose') {
+        if (input.digest) throw new AppError('validation', 'digest only applies to image projects; pass composeVersion');
+        // The latest saved version unless one is named, e.g. to go back to an earlier one.
+        composeVersionId = this.#projects.getComposeVersion(projectId, input.composeVersion ?? project.compose!.version).id;
+      } else if (input.composeVersion) {
+        throw new AppError('validation', 'composeVersion only applies to compose projects');
+      }
       const { lastInsertRowid: id } = this.#db.run(
-        'INSERT INTO deploys (project_id, trigger, digest, actor) VALUES (?, ?, ?, ?)',
-        projectId, trigger, input.digest ?? null, actorLabel(ctx.actor),
+        'INSERT INTO deploys (project_id, trigger, digest, compose_version_id, actor) VALUES (?, ?, ?, ?, ?)',
+        projectId, trigger, input.digest ?? null, composeVersionId, actorLabel(ctx.actor),
       );
-      this.#audit.record(ctx, 'deploy.request', `deploy:${id}`, { project: project.name, digest: input.digest ?? 'latest', trigger });
+      const version = project.kind === 'compose'
+        ? { composeVersion: input.composeVersion ?? project.compose!.version }
+        : { digest: input.digest ?? 'latest' };
+      this.#audit.record(ctx, 'deploy.request', `deploy:${id}`, { project: project.name, ...version, trigger });
       return this.get(id);
     });
     this.#queue.kick(projectId);
@@ -123,14 +132,11 @@ export class DeployService {
   drift(projectId: number): DriftReport {
     const project = this.#projects.get(projectId);
     const files = this.#files.drift(project.id, project.name);
-    const digest = project.image?.currentDigest;
-    return {
-      files,
-      pendingChanges: digest ? this.#files.pending(project.id, this.#engine.render(project, digest)) : false,
-    };
+    const live = this.#engine.renderCurrent(project);
+    return { files, pendingChanges: live ? this.#files.pending(project.id, live) : false };
   }
 
-  /** Stops the containers, removes the route and generated files, then the rows. Keeps `data/` unless asked. */
+  /** Stops the containers, removes the route and generated files, then the rows. Keeps `data/` and named volumes unless asked. */
   async removeProject(ctx: RequestContext, projectId: number, opts: { deleteData?: boolean } = {}): Promise<void> {
     const project = this.#projects.get(projectId);
     const active = this.#db.get(`SELECT 1 FROM deploys WHERE project_id = ? AND status IN ('queued', 'running')`, projectId);
@@ -140,7 +146,7 @@ export class DeployService {
 
     const dir = this.#files.dir(project.name);
     if (existsSync(join(dir, 'compose.yaml'))) {
-      await this.#docker.composeDown({ project: project.name, dir }, () => {});
+      await this.#docker.composeDown({ project: project.name, dir }, () => {}, { volumes: opts.deleteData ?? false });
     }
     for (const { id } of this.#db.all<{ id: number }>('SELECT id FROM routes WHERE project_id = ?', projectId)) {
       // If Caddy is unreachable, the route sync drops the route once it is back.

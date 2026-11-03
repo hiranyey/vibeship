@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { sha256Hex } from '../src/crypto/tokens.ts';
 import { AppError } from '../src/errors.ts';
 import { scopeCovers, TOKEN_PREFIX } from '../src/services/tokens.ts';
-import { imageProject, setup } from './helpers.ts';
+import { composeProject, imageProject, setup } from './helpers.ts';
 
 const isCode = (code: AppError['code']) => (err: unknown) => err instanceof AppError && err.code === code;
 
@@ -89,7 +89,7 @@ test('webhook tokens: rotating replaces the old one, and only image projects hav
   assert.equal(projects.findByWebhookToken(first.token), null);
   assert.equal(projects.findByWebhookToken(second.token)?.id, p.id);
 
-  const c = projects.create(ctx, { kind: 'compose', name: 'blog', composeYaml: 'services: {}', routedService: 'app', port: 80 });
+  const c = projects.create(ctx, composeProject());
   assert.throws(() => projects.rotateWebhook(ctx, c.id), isCode('validation'));
   assert.deepEqual(db.all<{ action: string }>(`SELECT action FROM audit_log WHERE action LIKE 'webhook.%' ORDER BY id`).map((r) => r.action),
     ['webhook.create', 'webhook.rotate']);

@@ -23,8 +23,8 @@ export class RouteSync {
       `SELECT r.id AS routeId, r.hostname, r.upstream
        FROM routes r
        JOIN projects p ON p.id = r.project_id
-       JOIN image_sources i ON i.project_id = p.id
-       WHERE i.current_digest IS NOT NULL AND p.status != 'stopped'
+       LEFT JOIN image_sources i ON i.project_id = p.id
+       WHERE (i.current_digest IS NOT NULL OR p.current_compose_version_id IS NOT NULL) AND p.status != 'stopped'
        ORDER BY r.id`,
     );
   }

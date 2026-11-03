@@ -5,6 +5,7 @@
 //   unhealthy  runs but answers 500 on /health
 //   slow       answers 503 on /health for SLOW_SECONDS (default 45), then 200
 //   probe      reports which internal addresses it can reach
+//   relay      answers with what it gets from RELAY_URL (compose-two-apps)
 import { createServer } from 'node:http';
 
 const mode = process.env.MODE ?? 'hello';
@@ -55,5 +56,13 @@ createServer(async (req, res) => {
     return key in process.env ? send(200, { value: process.env[key] }) : send(404, { error: `${key} is not set` });
   }
   if (mode === 'probe') return send(200, await probe());
+  if (mode === 'relay') {
+    try {
+      const upstream = await fetch(process.env.RELAY_URL, { signal: AbortSignal.timeout(3000) });
+      return send(200, `relay -> ${(await upstream.text()).trim()}`);
+    } catch (err) {
+      return send(502, `relay failed: ${err.cause?.code ?? err.message}`);
+    }
+  }
   send(200, `hello from ${version} (${mode})`);
 }).listen(Number(process.env.PORT ?? 8080), () => console.log(`fixture ${mode} ${version} listening`));
