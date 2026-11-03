@@ -30,6 +30,12 @@ export interface DockerRunner {
   pull(ref: string, auth: RegistryAuth | null, onLine: LineSink): Promise<string>;
   composeUp(target: ComposeTarget, onLine: LineSink): Promise<void>;
   composeDown(target: ComposeTarget, onLine: LineSink): Promise<void>;
+  /**
+   * Sends a container's log lines to `onLine`, oldest first: the last `tail`
+   * lines, then new ones as they come when `follow` is set, until the
+   * container stops or `signal` aborts. Throws if there is no such container.
+   */
+  containerLogs(name: string, opts: { tail: number; follow: boolean; signal?: AbortSignal }, onLine: LineSink): Promise<void>;
   /** Null when no container by that name exists. */
   inspectContainer(name: string): Promise<ContainerState | null>;
 }

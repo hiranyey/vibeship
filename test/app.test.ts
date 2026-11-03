@@ -14,7 +14,7 @@ function app() {
     BASE_DOMAIN: 'localhost',
     MASTER_KEY: generateMasterKey(),
   });
-  const a = createApp({ config, db: s.db, services: s });
+  const a = createApp({ config, db: s.db, services: s, oidc: null });
   a.get('/boom/app', () => { throw new AppError('conflict', 'taken', { field: 'name' }); });
   a.get('/boom/other', () => { throw new Error('secret internals'); });
   return a;
@@ -26,10 +26,10 @@ test('GET /healthz checks the database', async () => {
   assert.deepEqual(await res.json(), { ok: true });
 });
 
-test('GET / serves the placeholder page', async () => {
+test('GET / sends visitors without a session to the login', async () => {
   const res = await app().request('/');
-  assert.equal(res.status, 200);
-  assert.match(await res.text(), /Vibeship/);
+  assert.equal(res.status, 302);
+  assert.equal(res.headers.get('location'), '/auth/login');
 });
 
 test('AppErrors map to their status; other errors are hidden', async (t) => {

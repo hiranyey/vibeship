@@ -9,11 +9,26 @@
         "vibeship": {
           "listen": [":80"],
           "automatic_https": { "disable": true },
+          "logs": {},
           "routes": [
             {
               "@id": "vibeship-ui",
               "match": [{ "host": ["vibeship.localhost"] }],
-              "handle": [{ "handler": "reverse_proxy", "upstreams": [{ "dial": "vibeship:3000" }] }]
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "match": [{ "path": ["/hooks/*"] }],
+                      "handle": [{ "handler": "vars", "log_skip": true }]
+                    },
+                    {
+                      "handle": [{ "handler": "reverse_proxy", "upstreams": [{ "dial": "vibeship:3000" }] }]
+                    }
+                  ]
+                }
+              ],
+              "terminal": true
             },
             {
               "@id": "not-found",

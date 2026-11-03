@@ -61,6 +61,14 @@ export class FakeDocker implements DockerRunner {
     this.containers.delete(target.project);
   }
 
+  /** Log lines per container name, for `containerLogs`. */
+  readonly logLines = new Map<string, Array<{ stream: 'stdout' | 'stderr'; line: string }>>();
+
+  async containerLogs(name: string, opts: { tail: number; follow: boolean; signal?: AbortSignal }, onLine: LineSink): Promise<void> {
+    if (!this.containers.has(name) && !this.logLines.has(name)) throw new Error(`No such container: ${name}`);
+    for (const { stream, line } of (this.logLines.get(name) ?? []).slice(-opts.tail)) onLine(stream, line);
+  }
+
   async inspectContainer(name: string): Promise<ContainerState | null> {
     const c = this.containers.get(name);
     if (!c) return null;

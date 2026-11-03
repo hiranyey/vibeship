@@ -1,4 +1,5 @@
 import { actorLabel, type RequestContext } from '../actor.ts';
+import { randomToken, sha256Hex } from '../crypto/tokens.ts';
 import type { Db } from '../db/db.ts';
 import { AppError, notFound } from '../errors.ts';
 import { CreateProjectInput, RESERVED_NAMES, UpdateProjectInput } from '../schemas.ts';
@@ -191,7 +192,30 @@ export class ProjectService {
     });
   }
 
-  /** Removes the project's rows. Stopping containers and removing the Caddy route arrive with the deploy engine. */
+  /**
+   * Generates a new webhook token for an image project, replacing any old one
+   * so its URL stops working. The token is returned once; only its hash is kept.
+   */
+  rotateWebhook(ctx: RequestContext, id: number): { token: string; project: Project } {
+    const token = randomToken();
+    return this.#db.transaction(() => {
+      const project = this.get(id);
+      if (project.kind !== 'image') {
+        throw new AppError('validation', 'Webhooks deploy images pushed by CI, so only image projects have one');
+      }
+      this.#db.run(`UPDATE projects SET webhook_token_hash = ?, updated_at = ${NOW} WHERE id = ?`, sha256Hex(token), id);
+      this.#audit.record(ctx, project.hasWebhook ? 'webhook.rotate' : 'webhook.create', `project:${id}`, { name: project.name });
+      return { token, project: this.get(id) };
+    });
+  }
+
+  /** The project a webhook token belongs to, or null. */
+  findByWebhookToken(token: string): Project | null {
+    const row = this.#db.get<ProjectRow>('SELECT * FROM projects WHERE webhook_token_hash = ?', sha256Hex(token));
+    return row ? this.#hydrate(row) : null;
+  }
+
+  /** Removes the project's rows. Callers go through `DeployService.removeProject`, which also stops containers and drops the route. */
   delete(ctx: RequestContext, id: number): void {
     this.#db.transaction(() => {
       const project = this.get(id);

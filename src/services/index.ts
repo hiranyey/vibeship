@@ -15,7 +15,9 @@ import { DeployService } from './deploys.ts';
 import { EnvService } from './env.ts';
 import { ProjectService } from './projects.ts';
 import { RegistryService } from './registries.ts';
+import { SessionService } from './sessions.ts';
 import { SettingsService } from './settings.ts';
+import { TokenService } from './tokens.ts';
 
 /** The service layer shared by the UI, the HTTP API, the webhook receiver and MCP. */
 export type Services = ReturnType<typeof createServices>;
@@ -41,6 +43,8 @@ export function createServices(deps: {
   const env = new EnvService({ db, audit, box });
   const registries = new RegistryService({ db, audit, box });
   const settings = new SettingsService({ db, audit });
+  const tokens = new TokenService({ db, audit });
+  const sessions = new SessionService({ db, audit });
   const logs = new DeployLogs(db);
   const files = new ProjectFiles({ db, stackRoot: config.stackRoot });
 
@@ -53,5 +57,5 @@ export function createServices(deps: {
   const routes = new RouteSync({ db, caddy });
   const deploys = new DeployService({ db, audit, projects, engine, queue, logs, files, docker, caddy });
 
-  return { audit, projects, env, registries, settings, deploys, engine, queue, routes, files, docker };
+  return { audit, box, projects, env, registries, settings, tokens, sessions, deploys, engine, queue, routes, files, docker };
 }

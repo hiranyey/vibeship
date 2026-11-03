@@ -9,22 +9,36 @@ import type { ComposeTarget, ContainerState, DockerRunner, LineSink, RegistryAut
 type RunResult = { code: number; stdout: string[]; stderr: string[] };
 
 /** Runs a `docker` command, streaming each output line to `onLine` and collecting it. */
-function docker(args: string[], opts: { onLine?: LineSink; env?: NodeJS.ProcessEnv } = {}): Promise<RunResult> {
+function docker(
+  args: string[],
+  opts: { onLine?: LineSink; env?: NodeJS.ProcessEnv; signal?: AbortSignal; keepOutput?: boolean } = {},
+): Promise<RunResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn('docker', args, { env: { ...process.env, ...opts.env }, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn('docker', args, {
+      env: { ...process.env, ...opts.env },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      signal: opts.signal,
+      killSignal: 'SIGTERM',
+    });
     const out: RunResult = { code: 0, stdout: [], stderr: [] };
+    const keep = opts.keepOutput ?? true;
     const streams = [['stdout', child.stdout], ['stderr', child.stderr]] as const;
     const closed = streams.map(([name, stream]) =>
       new Promise<void>((done) => {
         const rl = createInterface({ input: stream });
         rl.on('line', (line) => {
-          out[name].push(line);
+          // Long-running streams keep only the last few lines, for error messages.
+          if (keep || out[name].length < 20) out[name].push(line);
+          else out[name] = [...out[name].slice(1), line];
           opts.onLine?.(name, line);
         });
         rl.on('close', done);
       }),
     );
-    child.on('error', reject);
+    child.on('error', (err) => {
+      if (err.name === 'AbortError') return; // `close` still fires and resolves
+      reject(err);
+    });
     child.on('close', async (code) => {
       await Promise.all(closed);
       out.code = code ?? 1;
@@ -85,6 +99,13 @@ export class CliDockerRunner implements DockerRunner {
   async composeDown(target: ComposeTarget, onLine: LineSink): Promise<void> {
     const args = composeArgs(target, 'down', '--remove-orphans');
     const r = await docker(args, { onLine });
+    if (r.code !== 0) throw failure(args, r);
+  }
+
+  async containerLogs(name: string, opts: { tail: number; follow: boolean; signal?: AbortSignal }, onLine: LineSink): Promise<void> {
+    const args = ['logs', '--tail', String(opts.tail), '--timestamps', ...(opts.follow ? ['--follow'] : []), name];
+    const r = await docker(args, { onLine, signal: opts.signal, keepOutput: false });
+    if (opts.signal?.aborted) return;
     if (r.code !== 0) throw failure(args, r);
   }
 

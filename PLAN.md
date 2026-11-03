@@ -65,17 +65,17 @@ Phases 5 and 6 both sit on top of the service layer from phases 1 to 4 and can b
 
 ## Phase 3: Auth, HTTP API and webhooks
 
-- [ ] Clerk OIDC login with PKCE against a Clerk development instance, and `/auth/login`, `/auth/callback`, `/auth/logout`.
-- [ ] Sessions: random tokens in a secure cookie, stored hashed.
-- [ ] API tokens: create (shown once), list and revoke, stored as SHA-256 hashes, with scope read, deploy or admin and an optional expiry.
-- [ ] Middleware that accepts a session or a bearer token and checks scope on each route.
-- [ ] Every HTTP API route in the spec, validated with the shared Zod schemas. Deleting a project goes through `DeployService.removeProject`, which also stops containers and drops the route.
-- [ ] Vibeship itself enforces auth on every route: apps on `web` can reach `vibeship:3000` directly, without going through Caddy.
-- [ ] Remove `src/dev-cli.ts` and move the integration tests onto the API.
-- [ ] Server-sent events streams for deploy logs and container logs.
-- [ ] Per-project webhooks: generate or rotate the token (shown once), `POST /hooks/deploy/:token`, and reject digests that don't belong to the project's image.
-- [ ] Caddy access log for the Vibeship host leaves out `/hooks/`.
-- [ ] `scripts/webhook.sh` to send a webhook request by hand.
+- [x] Clerk OIDC login with PKCE, and `/auth/login`, `/auth/callback`, `/auth/logout`. The ID token's signature, issuer, audience, expiry and nonce are checked (`src/auth/oidc.ts`, tested against a fake provider). Still to do: try it against the Clerk development instance.
+- [x] Sessions: random tokens in a secure cookie, stored hashed.
+- [x] API tokens: create (shown once), list and revoke, stored as SHA-256 hashes, with scope read, deploy or admin and an optional expiry. `npm run token` creates one from the command line, for the first token or when login is off.
+- [x] Middleware that accepts a session or a bearer token and checks scope on each route. Cookie-authenticated writes must come from Vibeship's own origin, because apps on sibling subdomains count as same-site.
+- [x] Every HTTP API route in the spec, validated with the shared Zod schemas, plus read routes for env, deploys, drift, registries, settings and the audit log. Deleting a project goes through `DeployService.removeProject`, which also stops containers and drops the route. `POST /api/projects/:id/compose` comes with compose versions in phase 4.
+- [x] Vibeship itself enforces auth on every route: apps on `web` can reach `vibeship:3000` directly, without going through Caddy.
+- [x] Remove `src/dev-cli.ts` and move the integration tests onto the API.
+- [x] Server-sent events streams for deploy logs and container logs.
+- [x] Per-project webhooks: generate or rotate the token (shown once), `POST /hooks/deploy/:token`, and reject digests that don't belong to the project's image. The deploy pulls `<repository>@<digest>`, so a foreign digest fails at the pull without touching the running version; an `image` field in the body, if sent, must name the project's repository.
+- [x] Caddy access log for the Vibeship host leaves out `/hooks/`.
+- [x] `scripts/webhook.sh` to send a webhook request by hand.
 
 **Done when** `scripts/webhook.sh` deploys `hello`, a rotated webhook URL returns 404 for the old token, each scope is refused on routes above it, and the integration tests from phase 2 now go through the API.
 
@@ -85,7 +85,7 @@ Phases 5 and 6 both sit on top of the service layer from phases 1 to 4 and can b
 - [ ] Unit tests with a table of good YAML and malicious YAML, covering every rejected key.
 - [ ] Patching: force the project name, attach the routed service to `web` with the `<project>` alias, and keep other services off `web`.
 - [ ] Reject a routed service whose name is reserved, since compose also adds the service name as an alias on `web`.
-- [ ] `compose_versions`: save numbered versions with the routed service and port.
+- [ ] `compose_versions`: save numbered versions with the routed service and port, through `POST /api/projects/:id/compose`.
 - [ ] Deploy compose projects through the same steps as image projects, with `docker compose pull` instead of pulling by digest.
 - [ ] Fixture `compose-two-apps`: two projects that both have `app` and `db` services.
 

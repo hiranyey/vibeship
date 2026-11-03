@@ -23,6 +23,8 @@ async function probe() {
     'caddy:2019': 'http://caddy:2019/config/',
     '172.31.250.2:2019': 'http://172.31.250.2:2019/config/',
     'vibeship:3000': 'http://vibeship:3000/healthz',
+    // Reachable on `web`, but must refuse a caller with no token.
+    'vibeship:3000/api': 'http://vibeship:3000/api/projects',
   };
   const results = {};
   for (const [name, url] of Object.entries(targets)) {

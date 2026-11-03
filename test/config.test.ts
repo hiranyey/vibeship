@@ -59,5 +59,10 @@ test('requires all OIDC settings or none', () => {
     OIDC_CLIENT_ID: 'id',
     OIDC_CLIENT_SECRET: 'secret',
   });
-  assert.deepEqual(c.oidc, { issuer: 'https://clerk.example.com', clientId: 'id', clientSecret: 'secret' });
+  assert.deepEqual(c.oidc, {
+    issuer: 'https://clerk.example.com',
+    clientId: 'id',
+    clientSecret: 'secret',
+    redirectUri: `${c.publicUrl}/auth/callback`,
+  });
 });

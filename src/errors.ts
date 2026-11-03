@@ -1,10 +1,14 @@
-export type ErrorCode = 'not_found' | 'conflict' | 'validation' | 'forbidden';
+export type ErrorCode = 'not_found' | 'conflict' | 'validation' | 'unauthorized' | 'forbidden' | 'unavailable';
 
-const httpStatus: Record<ErrorCode, 400 | 403 | 404 | 409> = {
+type Status = 400 | 401 | 403 | 404 | 409 | 503;
+
+const httpStatus: Record<ErrorCode, Status> = {
+  validation: 400,
+  unauthorized: 401,
+  forbidden: 403,
   not_found: 404,
   conflict: 409,
-  validation: 400,
-  forbidden: 403,
+  unavailable: 503,
 };
 
 /** An error that is safe to show to the caller, raised by the service layer. */
@@ -19,7 +23,7 @@ export class AppError extends Error {
     this.details = details;
   }
 
-  get status(): 400 | 403 | 404 | 409 {
+  get status(): Status {
     return httpStatus[this.code];
   }
 }

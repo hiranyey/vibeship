@@ -20,7 +20,7 @@ const EnvSchema = z.object({
   BASE_DOMAIN: z.string().regex(/^[a-z0-9.-]+$/, 'must be a lowercase domain'),
   TLS_MODE: z.enum(['origin-cert', 'off']).default('origin-cert'),
   CADDY_ADMIN_URL: z.url().default('http://caddy-api:2019'),
-  // Login arrives in phase 3; until then these may be empty.
+  // Browser login. Without them only API tokens work (create the first with `npm run token`).
   OIDC_ISSUER: z.url().optional(),
   OIDC_CLIENT_ID: z.string().min(1).optional(),
   OIDC_CLIENT_SECRET: z.string().min(1).optional(),
@@ -38,7 +38,8 @@ export type Config = {
   baseDomain: string;
   tlsMode: 'origin-cert' | 'off';
   caddyAdminUrl: string;
-  oidc: { issuer: string; clientId: string; clientSecret: string } | null;
+  /** Null when OIDC isn't configured: browser login is then off and only API tokens work. */
+  oidc: { issuer: string; clientId: string; clientSecret: string; redirectUri: string } | null;
 };
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -68,7 +69,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     tlsMode: e.TLS_MODE,
     caddyAdminUrl: e.CADDY_ADMIN_URL.replace(/\/+$/, ''),
     oidc: e.OIDC_ISSUER && e.OIDC_CLIENT_ID && e.OIDC_CLIENT_SECRET
-      ? { issuer: e.OIDC_ISSUER, clientId: e.OIDC_CLIENT_ID, clientSecret: e.OIDC_CLIENT_SECRET }
+      ? {
+          issuer: e.OIDC_ISSUER,
+          clientId: e.OIDC_CLIENT_ID,
+          clientSecret: e.OIDC_CLIENT_SECRET,
+          redirectUri: `${e.PUBLIC_URL.replace(/\/+$/, '')}/auth/callback`,
+        }
       : null,
   };
 }
