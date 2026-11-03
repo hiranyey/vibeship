@@ -1,0 +1,262 @@
+# Vibeship: project spec
+
+A self-hosted deploy portal for vibe-coded apps: push to GitHub, images land in RepoFlow, and Vibeship deploys them with Caddy routes, through a web UI and an MCP endpoint for agents.
+
+## Contents
+
+1. [Goals and non-goals](#goals-and-non-goals)
+2. [Architecture](#architecture)
+3. [Host layout](#host-layout)
+4. [Project types](#project-types)
+5. [Deploy flow](#deploy-flow)
+6. [Routing with Caddy](#routing-with-caddy)
+7. [Auth and secrets](#auth-and-secrets)
+8. [MCP endpoint](#mcp-endpoint)
+9. [HTTP API](#http-api)
+10. [Data model (SQLite)](#data-model-sqlite)
+11. [Web UI](#web-ui)
+12. [Bootstrap and packaging](#bootstrap-and-packaging)
+13. [Local development and testing](#local-development-and-testing)
+14. [MVP scope](#mvp-scope)
+
+## Goals and non-goals
+
+| | |
+|---|---|
+| Name | Vibeship |
+| URL | `vibeship.hiranyey.dev` |
+| Stack | Node 26 and TypeScript: Hono for the API and server-rendered HTML templates, one Docker image |
+| Storage | Node's built-in `node:sqlite` with plain SQL, no ORM or query builder |
+| Login | OIDC with Clerk (`clerk.hiranyey.dev`), same as hisaab |
+| Agents | MCP over Streamable HTTP at `/mcp` with scoped API tokens |
+
+Goals:
+
+- Deploy RepoFlow images built by GitHub Actions, triggered by a webhook.
+- Create and edit docker compose projects in the UI for things not in GitHub or RepoFlow.
+- Give every project its own folder, container, hostname and Caddy route automatically.
+- Keep infrastructure simple: a few seconds of downtime during a deploy is accepted, but a broken version never stays live.
+- Let any agent list, create, deploy and debug projects through MCP.
+
+Non-goals: no Cloudflare DNS changes (the `*.hiranyey.dev` wildcard already points at this VM), no notifications (status lives in the UI and deploy logs), no multi-host, and no building images on the VM.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  GH[GitHub Actions<br/>builds and pushes image] -- push --> RF[RepoFlow<br/>image registry]
+  GH -- webhook --> VS[Vibeship<br/>API, UI, MCP, SQLite]
+  VS -- pull --> RF
+  VS -- socket --> DK[Docker<br/>compose per project]
+  VS -- routes --> CD[Caddy<br/>admin API routes]
+  AG[Agents<br/>MCP clients] -- /mcp --> VS
+```
+
+One Node process serves the UI, the HTTP API, the webhook receiver and the MCP endpoint. All four call the same service layer, so a deploy from an agent, a webhook or a button runs the same code and lands in the same audit log. A single in-process queue serializes deploys per project; the `deploys` table is its durable record, so a restart can recover it (see [Deploy flow](#deploy-flow)).
+
+## Host layout
+
+| Path | Contents |
+|---|---|
+| `/opt/stack/caddy/` | `compose.yaml`, `Caddyfile`, `data/`, `config/`, Cloudflare origin certs |
+| `/opt/stack/vibeship/` | `compose.yaml`, `.env`, `data/vibeship.db`, `data/master.key` (mode 600) |
+| `/opt/stack/<project>/` | `compose.yaml`, `.env`, `data/`, all generated from the database |
+
+Two external Docker networks exist:
+
+| Network | Members | Purpose |
+|---|---|---|
+| `web` | Caddy, Vibeship, the routed container of every project | Caddy proxies to apps |
+| `caddy-admin` | Caddy and Vibeship only (`internal: true`) | Caddy admin API |
+
+Each project's routed container joins `web` with the network alias `<project>`, so Caddy always reaches it as `<project>:<port>` whatever the service is called inside the compose file. Only the routed service joins `web`; a project's other services (databases, workers) stay on that project's default compose network, so two projects can both have a service called `db` or `app` without clashing. Project names are unique slugs, and `caddy`, `vibeship` and `web` are reserved so no alias can shadow them. No container publishes a port on `0.0.0.0`: only Caddy listens publicly on 443, and any other published port is bound to `127.0.0.1`. Generated files are a cache of the database: Vibeship rewrites them on every deploy, and a hand edit is flagged as drift in the UI.
+
+## Project types
+
+| | Image project | Compose project |
+|---|---|---|
+| Source | RepoFlow image ref, e.g. `.../library/server:latest` | Compose YAML written in the UI or via MCP |
+| Trigger | Webhook, deploy button, MCP `deploy` | Save and deploy, MCP `deploy` |
+| Version | Image digest | Numbered `compose_versions` row |
+| Compose file | Generated from a template | User YAML, validated and patched |
+| Route | Hostname plus container port | Hostname plus service and port |
+
+For compose projects Vibeship validates the YAML with `docker compose config`, forces the project name, and attaches the routed service to `web` with the `<project>` alias. Validation is an allowlist, not a denylist, because Vibeship holds the Docker socket and a permissive compose file amounts to root on the host:
+
+- Allowed service keys: `image`, `command`, `entrypoint`, `environment`, `env_file` (the project's `.env` only), `ports` (bound to `127.0.0.1` only), `volumes`, `depends_on`, `healthcheck`, `restart`, `working_dir`, `user`, `labels`, `mem_limit`, `cpus`, `networks` (project networks only).
+- Volumes must be bind mounts under the project's `data/` folder or plain named volumes with no `driver` or `driver_opts`.
+- Allowed top-level keys: `services`, `volumes`, `networks` (with no external networks other than `web`, which Vibeship adds itself).
+- Anything else is rejected with the offending key named, including `privileged`, `network_mode`, `pid`, `ipc`, `cap_add`, `devices`, `security_opt`, `userns_mode`, `build` and `extends`.
+
+## Deploy flow
+
+1. **Trigger**: a POST to the project's webhook URL with the image digest, or a UI or MCP call. A deploy row is created as queued.
+2. **Pull**: pull the image by digest from RepoFlow with a read-only token. Compose projects run `docker compose pull`.
+3. **Render**: write `compose.yaml` and `.env` from the database into the project folder.
+4. **Start**: `docker compose -p <project> up -d`, streaming output into `deploy_logs`. This replaces the running container in place, so the app is briefly down; that is accepted.
+5. **Health check**: poll the health path or wait for the container to stay running, with a timeout (default 60 s).
+6. **Route**: on success, upsert the Caddy route (needed on first deploy or a hostname change) and mark the deploy healthy with its digest as current.
+7. **Fail safe**: on failure, re-render the last healthy version, bring it back, and mark the deploy failed with logs kept.
+
+**Recovery after a restart.** The queue lives in memory, so on boot, before accepting requests, Vibeship scans `deploys`:
+
+- A deploy left `running` is marked `failed` with the reason `interrupted by restart`. Vibeship then checks the project's containers; if they are not running and healthy, it runs the fail-safe step and brings back the last healthy version.
+- Deploys left `queued` are re-enqueued in their original order, after any recovery has finished.
+- Each recovery action writes an `audit_log` row with actor `system`.
+
+## Routing with Caddy
+
+Caddy runs as its own container with its admin API listening on port 2019 only on the internal `caddy-admin` network, which only Caddy and Vibeship join. Project containers share `web` with Caddy but cannot reach the admin API, so a compromised app cannot rewrite routes. Vibeship owns one server block and manages a route per hostname by `@id`, so a change touches one route and is validated by Caddy before it applies. On boot Vibeship reconciles every route from the database, so a restarted Caddy is rebuilt from scratch. TLS uses the Cloudflare origin certificate for `*.hiranyey.dev` with Cloudflare proxying in front.
+
+## Auth and secrets
+
+- Browser login is OIDC authorization code with PKCE against Clerk. The Clerk app has a single user and signup disabled, so anyone who completes the login is the admin, and Vibeship keeps no allowlist of its own. Signup must stay disabled in Clerk.
+- Sessions are random tokens in an HttpOnly, Secure, SameSite=Lax cookie, stored hashed in `sessions`.
+- Agents use bearer API tokens created in the UI, shown once, stored as SHA-256 hashes, with scope read, deploy or admin and an optional expiry.
+- Env values and registry tokens are encrypted with AES-256-GCM using `master.key`; secret values are write-only in the UI and MCP.
+- Each image project has its own webhook URL, `https://vibeship.hiranyey.dev/hooks/deploy/<token>`, where the token is 32 random bytes in base64url. It is shown once when generated, stored as a SHA-256 hash on the project, and can be rotated in the UI, which invalidates the old URL. The token identifies the project, so the request body carries only the digest, and Vibeship rejects a digest that does not belong to the project's `image_ref` repository. A replayed request can only redeploy a digest already pushed, which is harmless. Caddy's access log for `vibeship.hiranyey.dev` drops the `/hooks/` path so tokens are not written to disk.
+- A deploy-scope token can create and change compose projects; the compose allowlist in [Project types](#project-types) is what stops that from becoming host root.
+- Every change writes an `audit_log` row naming the user or the token.
+
+## MCP endpoint
+
+| Tool | Scope | What it does |
+|---|---|---|
+| `list_projects` | read | All projects with kind, hostname and status |
+| `get_project` | read | Config, route, env keys (no secret values), current version |
+| `get_status` | read | Live container state from Docker |
+| `list_deploys` | read | Recent deploys for a project |
+| `get_deploy_logs` | read | Log lines for one deploy |
+| `get_container_logs` | read | Tail of a container's logs |
+| `create_project` | deploy | New image or compose project with hostname |
+| `update_compose` | deploy | Save a new compose version |
+| `set_env` | deploy | Set or unset env vars and secrets |
+| `deploy` | deploy | Deploy latest, a digest or a compose version; returns a deploy id |
+| `restart`, `stop`, `start` | deploy | Container lifecycle |
+| `delete_project` | admin | Remove containers, route and rows; keeps `data/` unless asked |
+
+The endpoint uses `@modelcontextprotocol/sdk` over Streamable HTTP at `https://vibeship.hiranyey.dev/mcp`, authenticated with `Authorization: Bearer <token>`. `deploy` returns at once with a deploy id, and the agent follows progress with `get_deploy_logs` and `get_status`.
+
+## HTTP API
+
+| Route | Purpose |
+|---|---|
+| `GET /api/projects`, `POST /api/projects` | List and create projects |
+| `GET\|PATCH\|DELETE /api/projects/:id` | Read, edit and delete one project |
+| `PUT /api/projects/:id/env` | Replace env vars |
+| `POST /api/projects/:id/compose` | New compose version |
+| `POST /api/projects/:id/deploy` | Start a deploy |
+| `GET /api/deploys/:id/logs` | Deploy logs, streamed with server-sent events |
+| `GET /api/projects/:id/logs` | Container logs, streamed |
+| `POST /api/projects/:id/webhook` | Generate or rotate the project's webhook URL (shown once) |
+| `POST /hooks/deploy/:token` | Per-project webhook from GitHub Actions |
+| `/auth/login`, `/auth/callback`, `/auth/logout` | OIDC flow |
+| `/api/tokens` | Create, list and revoke API tokens |
+
+Request bodies are validated with Zod schemas shared by the API and the MCP tools.
+
+## Data model (SQLite)
+
+| Table | Key columns |
+|---|---|
+| `users` | id, oidc_sub, email, name, role, created_at, last_login_at |
+| `sessions` | id (hash), user_id, expires_at, ip, user_agent |
+| `api_tokens` | id, name, token_hash, scope, project_ids, created_by, last_used_at, expires_at, revoked_at |
+| `projects` | id, name (slug), kind, hostname, status, webhook_token_hash, created_by, timestamps |
+| `image_sources` | project_id, registry_id, image_ref, container_port, health_path, mem_limit, current_digest |
+| `compose_versions` | id, project_id, version, compose_yaml, routed_service, port, note, created_by |
+| `routes` | id, project_id, hostname, upstream, options (JSON) |
+| `env_vars` | project_id, key, value_encrypted, is_secret, updated_by, updated_at |
+| `registries` | id, name, url, username, token_encrypted |
+| `deploys` | id, project_id, trigger, digest or compose_version_id, status (queued, running, healthy, failed), failure_reason, actor, started_at, finished_at |
+| `deploy_logs` | deploy_id, seq, ts, stream, line |
+| `audit_log` | id, actor_type, user_id, token_id, action, target, details (JSON), ip, ts |
+| `settings` | key, value: base domain, health timeout |
+
+Access goes through `DatabaseSync` from `node:sqlite` with hand-written SQL and prepared statements. WAL mode is on, numbered `.sql` migrations run on boot, and live container state is never stored; the UI reads it from Docker.
+
+## Web UI
+
+- Dashboard: every project with status, hostname, current version and last deploy.
+- Project page with tabs for overview, deploys, logs, env, compose (with a YAML editor and version history) and settings.
+- New project wizard: pick image or compose, set name, hostname, port and env.
+- Deploy view with live streamed logs.
+- Settings for registries, API tokens and the audit log.
+
+Pages are rendered on the server by Hono with HTML templates from `hono/html`, laid out like Arcane (a sidebar, dense tables, status pills) in the Ink & Grid theme with one plain CSS file: a cream sidebar beside white content, flat surfaces, 2px ink borders on key containers, corners rounded about 6px (4px on small chips), monospace for digests, hostnames and logs, and signal orange `#e85d04` for primary actions and the running status (`#b45309` for orange text on white). A little vanilla JS streams live logs over server-sent events, and there is no frontend build step. The design system lives in `vibeship.css`, `components.html` and `DESIGN-SYSTEM.md`.
+
+## Bootstrap and packaging
+
+1. **Install Docker**: `bootstrap.sh` on fresh Debian installs Docker Engine and the compose plugin, and enables unattended security updates.
+2. **Networks and folders**: create the `web` network, the internal `caddy-admin` network, and `/opt/stack/{caddy,vibeship}`.
+3. **Caddy**: write its compose file (joining `web` and `caddy-admin`) and a base config with the admin API bound to the `caddy-admin` network only.
+4. **Vibeship**: generate `master.key`, write `.env` (OIDC settings), and start the container with no published port; Caddy routes `vibeship.hiranyey.dev` to it.
+5. **Firewall**: allow only 22 and 443; 443 can be limited to Cloudflare ranges.
+
+The image is built on `node:26-slim` with the Docker CLI and compose plugin. It mounts `/var/run/docker.sock` and binds `/opt/stack` at the same path, because compose resolves relative bind mounts against host paths. Vibeship never redeploys itself; it is updated by hand. The repo ships a sample GitHub Actions workflow that builds, pushes to RepoFlow and POSTs the digest to the project's webhook URL, kept as a repository secret.
+
+## Local development and testing
+
+The whole stack runs on a laptop with Docker Desktop or OrbStack. Nothing in the code hardcodes the production host; these settings come from `.env`:
+
+| Setting | Production | Local |
+|---|---|---|
+| `STACK_ROOT` | `/opt/stack` | `<repo>/.dev/stack` (an absolute path, bound at the same path in the container) |
+| `BASE_DOMAIN` | `hiranyey.dev` | `localhost`, so apps live at `<project>.localhost`, which browsers and curl resolve to 127.0.0.1 with no DNS setup |
+| `TLS_MODE` | `origin-cert` | `off` (Caddy serves plain HTTP on `127.0.0.1:8080`) |
+| `OIDC_*` | Clerk production instance | Clerk development instance with `http://vibeship.localhost:8080/auth/callback` as the redirect |
+| Registry | RepoFlow | `registry:2` on `localhost:5000` standing in for RepoFlow |
+
+`compose.dev.yaml` starts Caddy, the local registry and Vibeship with its source mounted and `node --watch`, on the same `web` and `caddy-admin` networks as production. `npm run dev` brings it up. Because local runs the same networks, Caddy admin API and Docker socket as production, most bugs show up on the laptop first.
+
+**Fixture apps.** `examples/` holds small images that `npm run fixtures` builds and pushes to the local registry:
+
+- `hello`: serves 200 on `/health`.
+- `crash`: exits right after starting.
+- `unhealthy`: runs but returns 500 on `/health`.
+- `probe`: tries to reach `caddy:2019` and other projects, and reports what it reached.
+- `compose-two-apps`: two compose projects that both have services named `app` and `db`.
+
+`scripts/webhook.sh <webhook-url> <image>` resolves the digest from the local registry and POSTs it the way the GitHub Actions workflow would. Running the real workflow locally with `act` is optional.
+
+**Test layers**, all on the built-in `node:test` runner:
+
+1. **Unit** (`npm test`, no Docker needed): the compose allowlist validator (a table of good and malicious YAML, including every rejected key), webhook token hashing and digest-to-repo matching, AES-GCM env encryption, Zod schemas, and migrations against an in-memory `:memory:` database. The deploy state machine is tested through a `DockerRunner` interface with a fake implementation, which lets tests simulate a crash, a timeout or an unhealthy container.
+2. **Integration** (`npm run test:integration`, needs the dev stack running): runs the real flows against real Docker and Caddy, and tears the projects down afterwards:
+   - Deploying `hello` through the webhook makes `hello.localhost:8080` return 200.
+   - Deploying `crash` or `unhealthy` over `hello` fails, and `hello` is serving again afterwards.
+   - Killing the Vibeship container mid-deploy and starting it again marks that deploy `failed` (`interrupted by restart`), restores the last healthy version and runs any queued deploys.
+   - `probe` cannot reach `caddy:2019`.
+   - Both `compose-two-apps` projects route correctly through their `<project>` aliases.
+   - A rotated webhook URL returns 404 for the old token.
+3. **MCP**: the integration suite drives `/mcp` with the SDK client using a deploy-scope token. To poke at it by hand, point MCP Inspector (`npx @modelcontextprotocol/inspector`) at `http://vibeship.localhost:8080/mcp`, or run `claude mcp add --transport http vibeship-dev http://vibeship.localhost:8080/mcp --header "Authorization: Bearer <token>"`.
+4. **Bootstrap**: `bootstrap.sh` is tested on a throwaway Debian VM (OrbStack, Lima or Multipass), checking that it is idempotent when run twice and that only 22 and 443 are open afterwards.
+
+## MVP scope
+
+**In the MVP**
+
+- Clerk login, single admin
+- Image and compose projects
+- Generated folders and Caddy routes
+- Encrypted env vars
+- Webhook and manual deploys
+- Health-checked deploys with fail safe
+- Deploy and container logs
+- MCP with scoped API tokens
+- Audit log
+- Bootstrap script
+- Local dev stack, fixture apps, unit and integration tests
+
+**Later**
+
+- Viewer role and per-project token allowlists
+- Registry polling fallback
+- Rollback button and MCP tool
+- Snapshots of `data/` and off-VM backups
+- Automatic image pruning
+- Multiple registries and routes per project
+- CPU and memory graphs
+- UI polish beyond functional pages
+
+**Done means:** a push to a repo with the sample workflow goes live at its subdomain within a couple of minutes, a broken image is replaced by the previous version once its health check fails, and an agent with a deploy token can create, deploy and debug a project through MCP alone.

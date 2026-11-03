@@ -1,0 +1,139 @@
+# Vibeship: build plan
+
+Phases for building the MVP described in [SPEC.md](SPEC.md). Each phase ends with something that runs and is tested on the local dev stack, so nothing is built on top of untested ground. Production comes last, once everything works locally.
+
+| Phase | Outcome |
+|---|---|
+| [0. Skeleton and dev stack](#phase-0-skeleton-and-dev-stack) | `npm run dev` brings up Vibeship, Caddy and a local registry |
+| [1. Data and core services](#phase-1-data-and-core-services) | Database, encryption, audit log and project rules, unit tested |
+| [2. Deploy engine for image projects](#phase-2-deploy-engine-for-image-projects) | Image projects deploy, fail safe and recover, with Caddy routes |
+| [3. Auth, HTTP API and webhooks](#phase-3-auth-http-api-and-webhooks) | Login, API tokens and per-project webhooks trigger deploys |
+| [4. Compose projects](#phase-4-compose-projects) | Compose projects validated by the allowlist and deployed |
+| [5. MCP endpoint](#phase-5-mcp-endpoint) | An agent can create, deploy and debug projects |
+| [6. Web UI](#phase-6-web-ui) | Every flow is available in the browser |
+| [7. Production](#phase-7-production) | Running on the VM at `vibeship.hiranyey.dev` |
+
+Phases 5 and 6 both sit on top of the service layer from phases 1 to 4 and can be built in either order.
+
+## Phase 0: Skeleton and dev stack
+
+- [ ] Repo setup: Node 26, TypeScript, Hono, Zod, `node:test`, and an `npm test` script.
+- [ ] Config loaded from `.env`: `STACK_ROOT`, `BASE_DOMAIN`, `TLS_MODE`, OIDC settings, master key path.
+- [ ] `Dockerfile` on `node:26-slim` with the Docker CLI and compose plugin.
+- [ ] `compose.dev.yaml` with Caddy, `registry:2` on `localhost:5000`, and Vibeship running `node --watch` with the source mounted.
+- [ ] The `web` and `caddy-admin` networks, the Docker socket mount, and `STACK_ROOT` bound at the same path.
+- [ ] Caddy base config: admin API on `caddy-admin` only, plain HTTP on `127.0.0.1:8080`, and a static route for `vibeship.localhost`.
+
+**Done when** `npm run dev` serves a placeholder page at `http://vibeship.localhost:8080`, and `npm test` runs an empty suite.
+
+## Phase 1: Data and core services
+
+- [ ] Migration runner for numbered `.sql` files on boot, with WAL mode on.
+- [ ] First migration with every table in the spec's data model.
+- [ ] A thin wrapper around `DatabaseSync` with prepared statements, and no ORM.
+- [ ] `master.key` generated if missing, and AES-256-GCM helpers to encrypt and decrypt env values and registry tokens.
+- [ ] `audit_log` writer that every service call goes through, with actor types user, token and system.
+- [ ] Zod schemas for projects, env vars, deploys and tokens, shared by the API and MCP later.
+- [ ] Project service: create, read, update and delete, slug rules, reserved names (`caddy`, `vibeship`, `web`), unique hostnames.
+- [ ] Env service: set and unset values; secret values are write-only.
+
+**Done when** unit tests cover migrations on `:memory:`, encryption round trips, slug and reserved-name rules, and the audit log.
+
+## Phase 2: Deploy engine for image projects
+
+- [ ] `DockerRunner` interface with a real implementation (shells out to `docker` and `docker compose`) and a fake one for tests.
+- [ ] Registry client for the local registry: pull by digest with a read-only token, and look up which repository a digest belongs to.
+- [ ] Render `compose.yaml` and `.env` from the database into `STACK_ROOT/<project>/`, with the routed container on `web` under the `<project>` alias.
+- [ ] Deploy steps: pull, render, `up -d`, health check with a timeout, route, and fail safe back to the last healthy version.
+- [ ] Every step's output streamed into `deploy_logs`.
+- [ ] An in-process queue that runs one deploy at a time per project.
+- [ ] Recovery on boot: interrupted `running` deploys are marked `failed` and the last healthy version is restored if needed, then `queued` deploys run again in order.
+- [ ] Caddy client: add, update and delete one route by `@id`, and rebuild every route from the database on boot.
+- [ ] Drift check: compare the files on disk with what the database would generate.
+- [ ] Fixture images in `examples/`: `hello`, `crash`, `unhealthy` and `probe`, built and pushed by `npm run fixtures`.
+
+**Done when** these pass:
+
+- Unit tests of the deploy steps against the fake Docker, simulating a crash, a timeout and an unhealthy container.
+- Integration tests, run with a temporary script before the API exists:
+  - `hello` deploys and answers at `hello.localhost:8080`.
+  - Deploying `crash` or `unhealthy` over it brings `hello` back.
+  - Killing Vibeship mid-deploy recovers correctly.
+  - `probe` cannot reach `caddy:2019`.
+  - Restarting Caddy rebuilds every route.
+
+## Phase 3: Auth, HTTP API and webhooks
+
+- [ ] Clerk OIDC login with PKCE against a Clerk development instance, and `/auth/login`, `/auth/callback`, `/auth/logout`.
+- [ ] Sessions: random tokens in a secure cookie, stored hashed.
+- [ ] API tokens: create (shown once), list and revoke, stored as SHA-256 hashes, with scope read, deploy or admin and an optional expiry.
+- [ ] Middleware that accepts a session or a bearer token and checks scope on each route.
+- [ ] Every HTTP API route in the spec, validated with the shared Zod schemas.
+- [ ] Server-sent events streams for deploy logs and container logs.
+- [ ] Per-project webhooks: generate or rotate the token (shown once), `POST /hooks/deploy/:token`, and reject digests that don't belong to the project's image.
+- [ ] Caddy access log for the Vibeship host leaves out `/hooks/`.
+- [ ] `scripts/webhook.sh` to send a webhook request by hand.
+
+**Done when** `scripts/webhook.sh` deploys `hello`, a rotated webhook URL returns 404 for the old token, each scope is refused on routes above it, and the integration tests from phase 2 now go through the API.
+
+## Phase 4: Compose projects
+
+- [ ] Allowlist validator for compose YAML: allowed service keys, allowed volumes, allowed top-level keys, and an error that names the offending key.
+- [ ] Unit tests with a table of good YAML and malicious YAML, covering every rejected key.
+- [ ] Patching: force the project name, attach the routed service to `web` with the `<project>` alias, and keep other services off `web`.
+- [ ] `compose_versions`: save numbered versions with the routed service and port.
+- [ ] Deploy compose projects through the same steps as image projects, with `docker compose pull` instead of pulling by digest.
+- [ ] Fixture `compose-two-apps`: two projects that both have `app` and `db` services.
+
+**Done when** malicious YAML is rejected, both `compose-two-apps` projects route correctly through their aliases, and a broken compose version brings back the last healthy one.
+
+## Phase 5: MCP endpoint
+
+- [ ] `/mcp` over Streamable HTTP with `@modelcontextprotocol/sdk`, authenticated with bearer API tokens.
+- [ ] Every tool in the spec's MCP table, calling the same service layer as the API and checking the tool's scope.
+- [ ] `deploy` returns a deploy id immediately; progress is read with `get_deploy_logs` and `get_status`.
+- [ ] No tool ever returns a secret value.
+- [ ] Integration tests that drive `/mcp` with the SDK client.
+
+**Done when** an agent with a deploy token, using Claude Code or MCP Inspector against `http://vibeship.localhost:8080/mcp`, creates a project, deploys it, reads its logs and fixes a failed deploy without touching the UI.
+
+## Phase 6: Web UI
+
+- [ ] `vibeship.css`, `components.html` and `DESIGN-SYSTEM.md` in the Ink & Grid theme.
+- [ ] Layout: sidebar, dense tables, status pills, rendered on the server with `hono/html`.
+- [ ] Dashboard listing every project with status, hostname, current version and last deploy.
+- [ ] Project page with tabs: overview, deploys, logs, env, compose (YAML editor and version history) and settings (including webhook URL and drift warnings).
+- [ ] New project wizard for image and compose projects.
+- [ ] Deploy view with live logs over server-sent events, in a little vanilla JS.
+- [ ] Settings pages for registries, API tokens and the audit log.
+
+**Done when** every flow from phases 2 to 4 can be done in the browser, logged in through the Clerk development instance.
+
+## Phase 7: Production
+
+- [ ] `bootstrap.sh` for fresh Debian: Docker Engine and compose plugin, unattended security updates, both networks, folders, Caddy and Vibeship, and a firewall allowing only 22 and 443.
+- [ ] Test `bootstrap.sh` on a throwaway Debian VM (OrbStack, Lima or Multipass), including running it twice.
+- [ ] `TLS_MODE=origin-cert` with the Cloudflare origin certificate for `*.hiranyey.dev`.
+- [ ] Clerk production instance with signup disabled.
+- [ ] RepoFlow registry configured with a read-only token.
+- [ ] Sample GitHub Actions workflow that builds, pushes to RepoFlow and posts the digest to the project's webhook URL.
+- [ ] Run `bootstrap.sh` on the VM and log in at `vibeship.hiranyey.dev`.
+
+**Done when** the spec's "Done means" holds in production:
+
+- A push to a repo with the sample workflow goes live at its subdomain within a couple of minutes.
+- A broken image is replaced by the previous version once its health check fails.
+- An agent with a deploy token can create, deploy and debug a project through MCP alone.
+
+## After the MVP
+
+These are listed under "Later" in the spec and aren't part of any phase above:
+
+- Viewer role and per-project token allowlists
+- Registry polling fallback
+- Rollback button and MCP tool, with compose images pinned by digest
+- Snapshots of `data/` and off-VM backups
+- Automatic image pruning
+- Multiple registries and routes per project
+- CPU and memory graphs
+- UI polish beyond functional pages
