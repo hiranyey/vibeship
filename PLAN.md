@@ -105,15 +105,16 @@ Phases 5 and 6 both sit on top of the service layer from phases 1 to 4 and can b
 
 ## Phase 6: Web UI
 
-- [ ] `vibeship.css`and `DESIGN-SYSTEM.html` in the Ink & Grid theme.
-- [ ] Layout: sidebar, dense tables, status pills, rendered on the server with `hono/html`.
-- [ ] Dashboard listing every project with status, hostname, current version and last deploy.
-- [ ] Project page with tabs: overview, deploys, logs, env, compose (YAML editor and version history) and settings (including webhook URL and drift warnings).
-- [ ] New project wizard for image and compose projects.
-- [ ] Deploy view with live logs over server-sent events, in a little vanilla JS.
-- [ ] Settings pages for registries, API tokens and the audit log.
+- [x] `vibeship.css` and `design-system.html` in the Ink & Grid theme. The app pages add a short section at the end of `vibeship.css`; `/static/vibeship.css` serves the same file.
+- [x] Layout: sidebar, dense tables, status pills, rendered on the server with `hono/html` (`src/ui/`). Pages send a strict Content-Security-Policy: scripts only from `/static/ui.js`, no framing, forms post only to Vibeship.
+- [x] Dashboard listing every project with status, hostname, current version and last deploy.
+- [x] Project page with tabs: overview (with live containers from Docker), deploys, logs, env, compose (YAML editor and version history, any version can be deployed again) and settings (including webhook URL and drift warnings). Stop, start and restart sit in the page header.
+- [x] New project wizard for image and compose projects, with env and secret env as `KEY=value` lines and an optional deploy right away. A form with an error comes back with what was typed, except secrets.
+- [x] Deploy view with live logs over server-sent events, in a little vanilla JS (`src/ui/static/ui.js`); it reloads when the deploy finishes. The logs tab streams the routed container's logs the same way.
+- [x] Settings pages for registries, API tokens (shown once, with the `claude mcp add` command) and the audit log, plus the health check timeout.
+- [x] Forms post back and redirect with a one-shot notice in a cookie; they go through the same origin check as the API. API tokens don't open the UI.
 
-**Done when** every flow from phases 2 to 4 can be done in the browser, logged in through the Clerk development instance.
+**Done when** every flow from phases 2 to 4 can be done in the browser, logged in through the Clerk development instance. Checked in a browser against the dev stack with a session minted directly (no Clerk credentials here): wizard, live deploy log, container logs, delete. The Clerk login itself is still to try, as in phase 3.
 
 ## Phase 7: Production
 

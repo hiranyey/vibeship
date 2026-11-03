@@ -15,8 +15,8 @@ function app() {
     MASTER_KEY: generateMasterKey(),
   });
   const a = createApp({ config, db: s.db, services: s, oidc: null });
-  a.get('/boom/app', () => { throw new AppError('conflict', 'taken', { field: 'name' }); });
-  a.get('/boom/other', () => { throw new Error('secret internals'); });
+  a.get('/api/boom/app', () => { throw new AppError('conflict', 'taken', { field: 'name' }); });
+  a.get('/api/boom/other', () => { throw new Error('secret internals'); });
   return a;
 }
 
@@ -34,12 +34,12 @@ test('GET / sends visitors without a session to the login', async () => {
 
 test('AppErrors map to their status; other errors are hidden', async (t) => {
   const a = app();
-  const res = await a.request('/boom/app');
+  const res = await a.request('/api/boom/app');
   assert.equal(res.status, 409);
   assert.deepEqual(await res.json(), { error: { code: 'conflict', message: 'taken', field: 'name' } });
 
   t.mock.method(console, 'error', () => {});
-  const res2 = await a.request('/boom/other');
+  const res2 = await a.request('/api/boom/other');
   assert.equal(res2.status, 500);
   assert.doesNotMatch(await res2.text(), /secret internals/);
 });

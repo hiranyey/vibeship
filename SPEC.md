@@ -187,7 +187,7 @@ Access goes through `DatabaseSync` from `node:sqlite` with hand-written SQL and 
 - Deploy view with live streamed logs.
 - Settings for registries, API tokens and the audit log.
 
-Pages are rendered on the server by Hono with HTML templates from `hono/html`, laid out like Arcane (a sidebar, dense tables, status pills) in the Ink & Grid theme with one plain CSS file: a cream sidebar beside white content, flat surfaces, 2px ink borders on key containers, corners rounded about 6px (4px on small chips), monospace for digests, hostnames and logs, and signal orange `#e85d04` for primary actions and the running status (`#b45309` for orange text on white). A little vanilla JS streams live logs over server-sent events, and there is no frontend build step. The design system lives in `vibeship.css`, `components.html` and `DESIGN-SYSTEM.md`.
+Pages are rendered on the server by Hono with HTML templates from `hono/html`, laid out like Arcane (a sidebar, dense tables, status pills) in the Ink & Grid theme with one plain CSS file: a cream sidebar beside white content, flat surfaces, 2px ink borders on key containers, corners rounded about 6px (4px on small chips), monospace for digests, hostnames and logs, and signal orange `#e85d04` for primary actions and the running status (`#b45309` for orange text on white). A little vanilla JS streams live logs over server-sent events, and there is no frontend build step. The design system lives in `vibeship.css` and `design-system.html`; the pages themselves are in `src/ui/`.
 
 ## Bootstrap and packaging
 

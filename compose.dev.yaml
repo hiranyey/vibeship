@@ -39,6 +39,7 @@ services:
       STACK_ROOT: ${STACK_ROOT:?run the stack with npm run dev}
     volumes:
       - ./src:/app/src
+      - ./vibeship.css:/app/vibeship.css:ro
       - /var/run/docker.sock:/var/run/docker.sock
       # Same path inside and out, because compose resolves bind mounts against host paths.
       - ${STACK_ROOT}:${STACK_ROOT}

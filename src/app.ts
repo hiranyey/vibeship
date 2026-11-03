@@ -1,6 +1,5 @@
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
-import { html } from 'hono/html';
 import { HttpOidcClient, type OidcClient } from './auth/oidc.ts';
 import type { Config } from './config.ts';
 import type { Db } from './db/db.ts';
@@ -11,6 +10,7 @@ import { authRoutes } from './http/auth-routes.ts';
 import { hookRoutes } from './http/hooks.ts';
 import { mcpRoute } from './mcp/route.ts';
 import type { Services } from './services/index.ts';
+import { isUiPath, uiError, uiRoutes } from './ui/index.ts';
 
 export type AppDeps = {
   config: Config;
@@ -57,30 +57,16 @@ export function createApp({ config, db, services, oidc }: AppDeps): Hono<AppEnv>
   app.route('/auth', authRoutes({ config, services, oidc: login }));
   app.route('/api', apiRoutes({ config, services }));
 
-  // Placeholder until the web UI lands in phase 6.
-  app.get('/', (c) => {
-    const p = c.get('principal');
-    if (!p) return c.redirect('/auth/login', 302);
-    const who = p.kind === 'user' ? p.user.email || p.user.oidcSub : `token ${p.token.name}`;
-    return c.html(html`<!doctype html>
-      <html lang="en">
-        <head>
-          <meta charset="utf-8" />
-          <meta name="viewport" content="width=device-width, initial-scale=1" />
-          <title>Vibeship</title>
-        </head>
-        <body style="font-family: system-ui, sans-serif; margin: 2rem">
-          <h1>Vibeship</h1>
-          <p>Running on <code>${config.publicUrl}</code> with base domain <code>${config.baseDomain}</code>.</p>
-          <p>Logged in as ${who}.</p>
-          <form method="post" action="/auth/logout"><button type="submit">Log out</button></form>
-        </body>
-      </html>`);
+  const ui = uiRoutes({ config, services });
+  app.route('/', ui.app);
+
+  app.notFound((c) => {
+    if (isUiPath(c.req.path) && c.get('principal')?.kind === 'user') return ui.view.error(c, 404, 'Not found', 'There is no page here.');
+    return c.json({ error: { code: 'not_found', message: 'Not found' } }, 404);
   });
 
-  app.notFound((c) => c.json({ error: { code: 'not_found', message: 'Not found' } }, 404));
-
   app.onError((err, c) => {
+    if (err instanceof AppError && isUiPath(c.req.path)) return uiError(ui.view, c, err);
     if (err instanceof AppError) {
       if (err.code === 'unauthorized') c.header('WWW-Authenticate', 'Bearer');
       return c.json({ error: { code: err.code, message: err.message, ...err.details } }, err.status);

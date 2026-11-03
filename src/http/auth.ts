@@ -23,6 +23,7 @@ export function cookieSettings(config: Pick<Config, 'publicUrl'>) {
     secure,
     session: secure ? '__Host-vs_session' : 'vs_session',
     login: secure ? '__Host-vs_login' : 'vs_login',
+    flash: secure ? '__Host-vs_flash' : 'vs_flash',
   };
 }
 
