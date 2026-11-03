@@ -130,13 +130,14 @@ Caddy runs as its own container with its admin API listening on port 2019 only o
 | `get_deploy_logs` | read | Log lines for one deploy |
 | `get_container_logs` | read | Tail of a container's logs |
 | `create_project` | deploy | New image or compose project with hostname |
+| `update_project` | deploy | Change the hostname, or an image project's image, port or health path |
 | `update_compose` | deploy | Save a new compose version |
 | `set_env` | deploy | Set or unset env vars and secrets |
 | `deploy` | deploy | Deploy latest, a digest or a compose version; returns a deploy id |
 | `restart`, `stop`, `start` | deploy | Container lifecycle |
 | `delete_project` | admin | Remove containers, route and rows; keeps `data/` unless asked |
 
-The endpoint uses `@modelcontextprotocol/sdk` over Streamable HTTP at `https://vibeship.hiranyey.dev/mcp`, authenticated with `Authorization: Bearer <token>`. `deploy` returns at once with a deploy id, and the agent follows progress with `get_deploy_logs` and `get_status`.
+The endpoint uses `@modelcontextprotocol/sdk` over Streamable HTTP at `https://vibeship.hiranyey.dev/mcp`, authenticated with `Authorization: Bearer <token>`; a browser session cookie is not accepted. It is stateless: every tool returns at once, so each POST gets a plain JSON reply and there are no sessions. A token is only shown the tools its scope allows. `deploy` returns at once with a deploy id, and the agent follows progress with `get_deploy_logs` and `get_status`.
 
 ## HTTP API
 
@@ -147,6 +148,7 @@ The endpoint uses `@modelcontextprotocol/sdk` over Streamable HTTP at `https://v
 | `PUT /api/projects/:id/env` | Replace env vars |
 | `GET\|POST /api/projects/:id/compose` | List compose versions, or save a new one |
 | `POST /api/projects/:id/deploy` | Start a deploy |
+| `GET /api/projects/:id/status`, `POST /api/projects/:id/{stop,start,restart}` | Live container state and lifecycle |
 | `GET /api/deploys/:id/logs` | Deploy logs, streamed with server-sent events |
 | `GET /api/projects/:id/logs` | Container logs, streamed |
 | `POST /api/projects/:id/webhook` | Generate or rotate the project's webhook URL (shown once) |

@@ -12,6 +12,8 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { request } from 'node:http';
 import { after, before, test } from 'node:test';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const ROOT = new URL('../../', import.meta.url).pathname;
@@ -20,7 +22,8 @@ const REPO = fixtures.repository!;
 const HELLO = 'it-hello';
 const PROBE = 'it-probe';
 const TWO = ['it-two-a', 'it-two-b'] as const;
-const PROJECTS = [HELLO, PROBE, ...TWO];
+const MCP_APP = 'it-mcp';
+const PROJECTS = [HELLO, PROBE, ...TWO, MCP_APP];
 const VIBESHIP = 'vibeship.localhost';
 
 type Deploy = { id: number; status: string; trigger: string; digest: string | null; failureReason: string | null };
@@ -281,4 +284,85 @@ test('a compose app cannot read Vibeship secrets through interpolation, nor reac
   assert.equal((await wait((await deploy(TWO[0])).id)).status, 'healthy');
   assert.equal(JSON.parse(await body(TWO[0], '/env/LEAK')).value, 'unset');
   assert.match(await body(TWO[0]), /^relay failed: (ENOTFOUND|EAI_AGAIN)/);
+});
+
+// MCP
+
+/** fetch for the MCP client: to Caddy on 127.0.0.1 with the URL's host as the Host header. */
+async function fetchViaCaddy(url: string | URL, init?: RequestInit): Promise<Response> {
+  const u = new URL(String(url));
+  const headers = Object.fromEntries(new Headers(init?.headers).entries());
+  return new Promise((resolve, reject) => {
+    const req = request(
+      { host: '127.0.0.1', port: 8080, method: init?.method ?? 'GET', path: u.pathname + u.search, headers: { ...headers, host: u.host }, agent: false, timeout: 30_000 },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('end', () => {
+          const h = new Headers();
+          for (const [k, v] of Object.entries(res.headers)) if (typeof v === 'string') h.set(k, v);
+          const status = res.statusCode ?? 0;
+          resolve(new Response(status === 204 || status === 202 && chunks.length === 0 ? null : Buffer.concat(chunks), { status, headers: h }));
+        });
+      },
+    );
+    req.on('timeout', () => req.destroy(new Error('MCP request timed out')));
+    req.on('error', reject);
+    req.end(typeof init?.body === 'string' ? init.body : undefined);
+  });
+}
+
+test('an agent with a deploy token creates, deploys, debugs and fixes a project over MCP alone', async () => {
+  const { token } = await api<{ token: string }>('POST', '/tokens', { name: 'it-mcp-agent', scope: 'deploy' });
+  const client = new Client({ name: 'integration-agent', version: '1.0.0' });
+  await client.connect(new StreamableHTTPClientTransport(new URL(`http://${VIBESHIP}:8080/mcp`), {
+    requestInit: { headers: { authorization: `Bearer ${token}` } },
+    fetch: fetchViaCaddy,
+  }));
+  try {
+    const tools = (await client.listTools()).tools.map((t) => t.name);
+    assert.ok(tools.includes('deploy') && !tools.includes('delete_project'), tools.join(', '));
+    const call = async <T>(name: string, args: Record<string, unknown> = {}): Promise<T> => {
+      const r = await client.callTool({ name, arguments: args }) as { content: Array<{ text: string }>; isError?: boolean };
+      assert.ok(!r.isError, `${name}: ${r.content[0]?.text}`);
+      return JSON.parse(r.content[0]!.text) as T;
+    };
+    type Logs = { finished: boolean; deploy: { status: string; failureReason: string | null }; nextAfterSeq: number; lines: Array<{ line: string }> };
+    const follow = async (deployId: number) => {
+      let after = 0;
+      const lines: string[] = [];
+      for (;;) {
+        const l = await call<Logs>('get_deploy_logs', { deployId, afterSeq: after });
+        lines.push(...l.lines.map((x) => x.line));
+        after = l.nextAfterSeq;
+        if (l.finished) return { ...l.deploy, lines };
+        await sleep(1000);
+      }
+    };
+
+    // The wrong port: nothing answers the health check, so the deploy fails.
+    await call('create_project', { kind: 'image', name: MCP_APP, imageRef: `${REPO}:hello`, containerPort: 9999, healthPath: '/health' });
+    const first = await follow((await call<{ deployId: number }>('deploy', { project: MCP_APP })).deployId);
+    assert.equal(first.status, 'failed');
+    assert.match(first.failureReason!, /timed out/);
+    assert.ok(first.lines.some((l) => /9999\/health answered ECONNREFUSED/.test(l)), first.lines.join('\n'));
+
+    // The agent fixes the port and deploys again.
+    await call('update_project', { project: MCP_APP, containerPort: 8080 });
+    const fixed = await follow((await call<{ deployId: number }>('deploy', { project: MCP_APP })).deployId);
+    assert.equal(fixed.status, 'healthy', fixed.failureReason ?? '');
+    assert.equal(await body(MCP_APP), 'hello from v1 (hello)');
+
+    const status = await call<{ status: string; containers: Array<{ name: string; state: string }> }>('get_status', { project: MCP_APP });
+    assert.deepEqual([status.status, status.containers.map((c) => `${c.name}:${c.state}`)], ['running', [`${MCP_APP}:running`]]);
+    const container = await call<{ lines: Array<{ line: string }> }>('get_container_logs', { project: MCP_APP, tail: 20 });
+    assert.ok(container.lines.some((l) => l.line.includes('fixture hello v1 listening')));
+
+    await call('stop', { project: MCP_APP });
+    assert.equal((await http(`${MCP_APP}.localhost`, 'GET', '/')).status, 404);
+    await call('start', { project: MCP_APP });
+    await until('the app to answer after start', async () => ((await body(MCP_APP)) === 'hello from v1 (hello)' ? true : undefined), 30_000);
+  } finally {
+    await client.close();
+  }
 });

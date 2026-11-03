@@ -9,6 +9,7 @@ import { apiRoutes } from './http/api.ts';
 import { type AppEnv, authenticate, clientIp } from './http/auth.ts';
 import { authRoutes } from './http/auth-routes.ts';
 import { hookRoutes } from './http/hooks.ts';
+import { mcpRoute } from './mcp/route.ts';
 import type { Services } from './services/index.ts';
 
 export type AppDeps = {
@@ -50,6 +51,8 @@ export function createApp({ config, db, services, oidc }: AppDeps): Hono<AppEnv>
 
   app.use('/hooks/*', bodyLimit({ maxSize: 16 * 1024, onError: tooLarge }));
   app.use('/api/*', bodyLimit({ maxSize: 1024 * 1024, onError: tooLarge }));
+  app.use('/mcp', bodyLimit({ maxSize: 1024 * 1024, onError: tooLarge }));
+  app.all('/mcp', mcpRoute(services));
   app.route('/hooks', hookRoutes({ services }));
   app.route('/auth', authRoutes({ config, services, oidc: login }));
   app.route('/api', apiRoutes({ config, services }));

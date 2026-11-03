@@ -98,6 +98,10 @@ export function apiRoutes(deps: { config: Config; services: Services }): Hono<Ap
     return c.json(s.deploys.request(principal(c).ctx, project(c).id, raw, trigger(c)), 202);
   });
   app.get('/projects/:id/drift', read, (c) => c.json(s.deploys.drift(project(c).id)));
+  app.get('/projects/:id/status', read, async (c) => c.json(await s.deploys.status(project(c).id)));
+  for (const action of ['stop', 'start', 'restart'] as const) {
+    app.post(`/projects/:id/${action}`, deploy, async (c) => c.json(await s.deploys.lifecycle(principal(c).ctx, project(c).id, action)));
+  }
 
   app.post('/projects/:id/webhook', admin, (c) => {
     const { token, project: p } = s.projects.rotateWebhook(principal(c).ctx, project(c).id);

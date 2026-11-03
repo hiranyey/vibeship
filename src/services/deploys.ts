@@ -7,11 +7,11 @@ import type { DeployEngine, DeployStatus } from '../deploy/engine.ts';
 import type { FileDrift, ProjectFiles } from '../deploy/files.ts';
 import type { DeployLogs, LogLine } from '../deploy/logs.ts';
 import type { DeployQueue } from '../deploy/queue.ts';
-import type { DockerRunner } from '../docker/runner.ts';
+import type { ContainerSummary, DockerRunner, LifecycleAction } from '../docker/runner.ts';
 import { AppError, notFound } from '../errors.ts';
 import { DeployInput } from '../schemas.ts';
 import type { AuditLog } from './audit.ts';
-import type { ProjectService } from './projects.ts';
+import type { Project, ProjectService } from './projects.ts';
 import { parseInput } from './validate.ts';
 
 export type DeployTrigger = 'webhook' | 'ui' | 'api' | 'mcp' | 'recovery';
@@ -49,6 +49,17 @@ export type DriftReport = {
   files: FileDrift[];
   /** True when env or settings changed in the database since the last deploy. */
   pendingChanges: boolean;
+};
+
+/** A project's live state, read from Docker rather than stored. */
+export type ProjectStatus = {
+  project: string;
+  status: Project['status'];
+  hostname: string;
+  /** The digest or compose version that last deployed healthy. */
+  liveVersion: string | null;
+  containers: ContainerSummary[];
+  lastDeploy: Deploy | null;
 };
 
 export class DeployService {
@@ -136,13 +147,62 @@ export class DeployService {
     return { files, pendingChanges: live ? this.#files.pending(project.id, live) : false };
   }
 
+  async status(projectId: number): Promise<ProjectStatus> {
+    const p = this.#projects.get(projectId);
+    const [last] = this.list(projectId, 1);
+    return {
+      project: p.name,
+      status: p.status,
+      hostname: p.hostname,
+      liveVersion: p.kind === 'image'
+        ? p.image?.currentDigest ?? null
+        : p.deployedComposeVersion === null ? null : `compose version ${p.deployedComposeVersion}`,
+      containers: await this.#docker.projectContainers(p.name),
+      lastDeploy: last ?? null,
+    };
+  }
+
+  /**
+   * Stops, starts or restarts a deployed project's containers. A stopped
+   * project's route is dropped, so its hostname answers 404 until it starts.
+   * Refused while a deploy is queued or running, which would race it.
+   */
+  async lifecycle(ctx: RequestContext, projectId: number, action: LifecycleAction): Promise<ProjectStatus> {
+    const project = this.#projects.get(projectId);
+    this.#checkIdle(project);
+    const dir = this.#files.dir(project.name);
+    if (!existsSync(join(dir, 'compose.yaml')) || !this.#engine.current(project)) {
+      throw new AppError('conflict', `${project.name} has not been deployed yet`);
+    }
+    const route = this.#db.get<{ id: number; hostname: string; upstream: string }>('SELECT id, hostname, upstream FROM routes WHERE project_id = ?', projectId);
+
+    await this.#docker.composeLifecycle({ project: project.name, dir }, action, () => {});
+    const status = action === 'stop' ? 'stopped' : 'running';
+    this.#db.transaction(() => {
+      this.#db.run(`UPDATE projects SET status = ? WHERE id = ?`, status, projectId);
+      this.#audit.record(ctx, `project.${action}`, `project:${projectId}`, { name: project.name });
+    });
+    // The route sync would catch up within its interval; this makes it immediate.
+    if (route) {
+      const change = action === 'stop'
+        ? this.#caddy.deleteRoute(route.id)
+        : this.#caddy.upsertRoute({ routeId: route.id, hostname: route.hostname, upstream: route.upstream });
+      await change.catch(() => {});
+    }
+    return this.status(projectId);
+  }
+
+  #checkIdle(project: Project): void {
+    const active = this.#db.get(`SELECT 1 FROM deploys WHERE project_id = ? AND status IN ('queued', 'running')`, project.id);
+    if (active || this.#queue.isBusy(project.id)) {
+      throw new AppError('conflict', `${project.name} has a deploy in progress; try again when it finishes`);
+    }
+  }
+
   /** Stops the containers, removes the route and generated files, then the rows. Keeps `data/` and named volumes unless asked. */
   async removeProject(ctx: RequestContext, projectId: number, opts: { deleteData?: boolean } = {}): Promise<void> {
     const project = this.#projects.get(projectId);
-    const active = this.#db.get(`SELECT 1 FROM deploys WHERE project_id = ? AND status IN ('queued', 'running')`, projectId);
-    if (active || this.#queue.isBusy(projectId)) {
-      throw new AppError('conflict', `${project.name} has a deploy in progress; try again when it finishes`);
-    }
+    this.#checkIdle(project);
 
     const dir = this.#files.dir(project.name);
     if (existsSync(join(dir, 'compose.yaml'))) {

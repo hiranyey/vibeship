@@ -14,6 +14,19 @@ export type ContainerState = {
   image: string;
 };
 
+/** One of a project's containers, as `docker ps` reports it. */
+export type ContainerSummary = {
+  name: string;
+  /** The compose service it belongs to. */
+  service: string;
+  state: string;
+  /** Docker's human summary, e.g. "Up 5 minutes (healthy)". */
+  status: string;
+  image: string;
+};
+
+export type LifecycleAction = 'stop' | 'start' | 'restart';
+
 export type ComposeTarget = {
   /** Compose project name, which is also the Vibeship project name. */
   project: string;
@@ -41,6 +54,10 @@ export interface DockerRunner {
    * container stops or `signal` aborts. Throws if there is no such container.
    */
   containerLogs(name: string, opts: { tail: number; follow: boolean; signal?: AbortSignal }, onLine: LineSink): Promise<void>;
+  /** `docker compose stop|start|restart` for the whole project. */
+  composeLifecycle(target: ComposeTarget, action: LifecycleAction, onLine: LineSink): Promise<void>;
+  /** Every container of a compose project, running or not. */
+  projectContainers(project: string): Promise<ContainerSummary[]>;
   /** Null when no container by that name exists. */
   inspectContainer(name: string): Promise<ContainerState | null>;
 }

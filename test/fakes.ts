@@ -5,13 +5,13 @@ import { parse } from 'yaml';
 import type { CaddyApi, RouteSpec } from '../src/caddy/client.ts';
 import type { HttpProbe } from '../src/deploy/health.ts';
 import { parseImageRef } from '../src/docker/image-ref.ts';
-import type { ComposeTarget, ContainerState, DockerRunner, LineSink, RegistryAuth } from '../src/docker/runner.ts';
+import type { ComposeTarget, ContainerState, ContainerSummary, DockerRunner, LifecycleAction, LineSink, RegistryAuth } from '../src/docker/runner.ts';
 
 /** How a fake image behaves once started. */
 export type Behavior = 'healthy' | 'crash' | 'unhealthy' | 'never-starts';
 
 type Image = { repository: string; digest: string; behavior: Behavior };
-type Container = { image: string; behavior: Behavior; project: string };
+type Container = { image: string; behavior: Behavior; project: string; stopped?: boolean };
 
 /**
  * A pretend Docker with a built-in registry. Containers behave as their
@@ -105,6 +105,26 @@ export class FakeDocker implements DockerRunner {
     for (const [name, c] of this.containers) if (c.project === target.project) this.containers.delete(name);
   }
 
+  async composeLifecycle(target: ComposeTarget, action: LifecycleAction): Promise<void> {
+    this.calls.push(`${action} ${target.project}`);
+    const own = [...this.containers.values()].filter((c) => c.project === target.project);
+    if (own.length === 0) throw new Error(`no containers for project ${target.project}`);
+    for (const c of own) c.stopped = action === 'stop';
+  }
+
+  async projectContainers(project: string): Promise<ContainerSummary[]> {
+    return [...this.containers.entries()]
+      .filter(([, c]) => c.project === project)
+      .map(([name, c]) => ({
+        name,
+        service: name === project ? project : name.slice(project.length + 1).replace(/-\d+$/, ''),
+        state: c.stopped ? 'exited' : 'running',
+        status: c.stopped ? 'Exited (0)' : 'Up',
+        image: c.image,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
   /** Log lines per container name, for `containerLogs`. */
   readonly logLines = new Map<string, Array<{ stream: 'stdout' | 'stderr'; line: string }>>();
 
@@ -117,6 +137,7 @@ export class FakeDocker implements DockerRunner {
     const c = this.containers.get(name);
     if (!c) return null;
     const base = { image: c.image, health: null, exitCode: 0, restartCount: 0 };
+    if (c.stopped) return { ...base, status: 'exited' };
     switch (c.behavior) {
       case 'crash':
         return { ...base, status: 'restarting', exitCode: 1, restartCount: 1 };

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { parseImageRef } from './image-ref.ts';
-import type { ComposeTarget, ContainerState, DockerRunner, LineSink, RegistryAuth } from './runner.ts';
+import type { ComposeTarget, ContainerState, ContainerSummary, DockerRunner, LifecycleAction, LineSink, RegistryAuth } from './runner.ts';
 
 type RunResult = { code: number; stdout: string[]; stderr: string[] };
 
@@ -137,6 +137,23 @@ export class CliDockerRunner implements DockerRunner {
     const r = await docker(args, { onLine, signal: opts.signal, keepOutput: false });
     if (opts.signal?.aborted) return;
     if (r.code !== 0) throw failure(args, r);
+  }
+
+  async composeLifecycle(target: ComposeTarget, action: LifecycleAction, onLine: LineSink): Promise<void> {
+    const args = composeArgs(target, action);
+    const r = await docker(args, { onLine });
+    if (r.code !== 0) throw failure(args, r);
+  }
+
+  async projectContainers(project: string): Promise<ContainerSummary[]> {
+    const args = ['ps', '--all', '--no-trunc', '--filter', `label=com.docker.compose.project=${project}`, '--format', '{{json .}}'];
+    const r = await docker(args);
+    if (r.code !== 0) throw failure(args, r);
+    return r.stdout.filter(Boolean).map((line) => {
+      const c = JSON.parse(line) as { Names: string; State: string; Status: string; Image: string; Labels: string };
+      const service = /(?:^|,)com\.docker\.compose\.service=([^,]*)/.exec(c.Labels)?.[1] ?? '';
+      return { name: c.Names, service, state: c.State, status: c.Status, image: c.Image };
+    }).sort((a, b) => a.name.localeCompare(b.name));
   }
 
   async inspectContainer(name: string): Promise<ContainerState | null> {

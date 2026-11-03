@@ -94,11 +94,12 @@ Phases 5 and 6 both sit on top of the service layer from phases 1 to 4 and can b
 
 ## Phase 5: MCP endpoint
 
-- [ ] `/mcp` over Streamable HTTP with `@modelcontextprotocol/sdk`, authenticated with bearer API tokens.
-- [ ] Every tool in the spec's MCP table, calling the same service layer as the API and checking the tool's scope.
-- [ ] `deploy` returns a deploy id immediately; progress is read with `get_deploy_logs` and `get_status`.
-- [ ] No tool ever returns a secret value.
-- [ ] Integration tests that drive `/mcp` with the SDK client.
+- [x] `/mcp` over Streamable HTTP with `@modelcontextprotocol/sdk`, authenticated with bearer API tokens only (a browser session is refused). It runs stateless with plain JSON replies: each request gets a fresh server, and nothing needs a session or a stream.
+- [x] Every tool in the spec's MCP table, calling the same service layer as the API and checking the tool's scope. A token only sees the tools its scope allows. `update_project` was added so an agent can fix a wrong port or health path.
+- [x] `deploy` returns a deploy id immediately; progress is read with `get_deploy_logs` (with `afterSeq` to page) and `get_status`.
+- [x] No tool ever returns a secret value.
+- [x] Integration tests that drive `/mcp` with the SDK client.
+- [x] `restart`, `stop` and `start` also exist in the HTTP API, with `GET /api/projects/:id/status`. A stopped project's route is dropped until it starts again.
 
 **Done when** an agent with a deploy token, using Claude Code or MCP Inspector against `http://vibeship.localhost:8080/mcp`, creates a project, deploys it, reads its logs and fixes a failed deploy without touching the UI.
 
