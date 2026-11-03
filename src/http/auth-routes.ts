@@ -2,6 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { Hono } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { html } from 'hono/html';
+import { systemContext } from '../actor.ts';
 import type { OidcClient, LoginAttempt } from '../auth/oidc.ts';
 import type { Config } from '../config.ts';
 import type { Services } from '../services/index.ts';
@@ -90,6 +91,15 @@ export function authRoutes(deps: { config: Config; services: Services; oidc: Oid
     } catch (err) {
       console.error('OIDC login failed', err);
       return failed(`Could not complete the login: ${(err as Error).message}`, 502);
+    }
+
+    if (config.adminEmails.length > 0 && !(identity.emailVerified && config.adminEmails.includes(identity.email.toLowerCase()))) {
+      services.audit.record({ ...systemContext, ip: c.get('ip') }, 'auth.refused', null, {
+        sub: identity.sub, email: identity.email, emailVerified: identity.emailVerified ?? false,
+      });
+      return c.html(page('Not allowed', html`<p>${identity.email || 'This account'} may not log in to this Vibeship${
+        identity.email && !identity.emailVerified ? ' (its email is not verified)' : ''
+      }.</p>`), 403);
     }
 
     const { token, expiresAt } = services.sessions.login(identity, { ip: c.get('ip'), userAgent: c.req.header('user-agent') });

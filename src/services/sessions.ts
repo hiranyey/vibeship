@@ -24,7 +24,13 @@ type UserRow = {
 };
 
 /** What the identity provider says about the person who just logged in. */
-export type OidcIdentity = { sub: string; email: string; name: string | null };
+export type OidcIdentity = {
+  sub: string;
+  email: string;
+  /** Whether the provider says the email is verified; ADMIN_EMAILS only accepts verified ones. */
+  emailVerified?: boolean;
+  name: string | null;
+};
 
 export const SESSION_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 

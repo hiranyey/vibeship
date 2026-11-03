@@ -34,6 +34,8 @@ type IdTokenClaims = {
   iat?: number;
   nonce?: string;
   email?: string;
+  /** Clerk sends a boolean; some providers send the string "true". */
+  email_verified?: boolean | string;
   name?: string;
   given_name?: string;
   family_name?: string;
@@ -100,21 +102,25 @@ export class HttpOidcClient implements OidcClient {
     const claims = await this.#verifyIdToken(body.id_token, d, attempt.nonce);
 
     let email = claims.email;
+    let emailVerified = verified(claims.email_verified);
     let name = claims.name ?? ([claims.given_name, claims.family_name].filter(Boolean).join(' ') || undefined);
     if ((!email || !name) && d.userinfo_endpoint && body.access_token) {
       const info = await this.#userinfo(d.userinfo_endpoint, body.access_token, claims.sub!);
-      email ??= info.email;
+      if (!email && info.email) {
+        email = info.email;
+        emailVerified = verified(info.email_verified);
+      }
       name ??= info.name;
     }
-    return { sub: claims.sub!, email: email ?? '', name: name ?? null };
+    return { sub: claims.sub!, email: email ?? '', emailVerified: Boolean(email) && emailVerified, name: name ?? null };
   }
 
-  async #userinfo(endpoint: string, accessToken: string, sub: string): Promise<{ email?: string; name?: string }> {
+  async #userinfo(endpoint: string, accessToken: string, sub: string): Promise<Pick<IdTokenClaims, 'email' | 'email_verified' | 'name'>> {
     const res = await this.#fetch(endpoint, { headers: { authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(10_000) });
     if (!res.ok) return {};
     const info = (await res.json()) as IdTokenClaims;
     // The spec requires userinfo's subject to match the ID token's.
-    return info.sub === sub ? { email: info.email, name: info.name } : {};
+    return info.sub === sub ? { email: info.email, email_verified: info.email_verified, name: info.name } : {};
   }
 
   async #discover(): Promise<Discovery> {
@@ -200,3 +206,5 @@ function verifySignature(alg: string | undefined, key: KeyObject, data: Buffer, 
       throw new Error(`ID token algorithm ${alg ?? '(none)'} is not supported`);
   }
 }
+
+const verified = (v: boolean | string | undefined): boolean => v === true || v === 'true';

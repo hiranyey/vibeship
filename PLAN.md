@@ -118,12 +118,12 @@ Phases 5 and 6 both sit on top of the service layer from phases 1 to 4 and can b
 
 ## Phase 7: Production
 
-- [ ] `bootstrap.sh` for fresh Debian: Docker Engine and compose plugin, unattended security updates, both networks, folders, Caddy and Vibeship, and a firewall allowing only 22 and 443.
-- [ ] Test `bootstrap.sh` on a throwaway Debian VM (OrbStack, Lima or Multipass), including running it twice.
-- [ ] `TLS_MODE=origin-cert` with the Cloudflare origin certificate for `*.hiranyey.dev`.
-- [ ] Clerk production instance with signup disabled.
-- [ ] RepoFlow registry configured with a read-only token.
-- [ ] Sample GitHub Actions workflow that builds, pushes to RepoFlow and posts the digest to the project's webhook URL.
+- [x] `bootstrap.sh` for fresh Debian: Docker Engine and compose plugin, unattended security updates, container log limits, both networks, folders, Caddy and Vibeship, and a firewall allowing only 22 and 443 (optionally 443 from Cloudflare only, also enforced in `DOCKER-USER`). Settings are kept in Vibeship's `.env`, so re-running it (after `git pull`) is the update path. The steps and the Cloudflare and Clerk setup are in `PRODUCTION.md`.
+- [ ] Test `bootstrap.sh` on a throwaway Debian VM (OrbStack, Lima or Multipass), including running it twice. Done so far, in a sandbox without Debian mirrors: shellcheck; everything after package install (`SKIP_PACKAGES=1 SKIP_FIREWALL=1`) against a real Docker daemon, including a first install, a second run that changes nothing, a settings change that recreates only Vibeship, refusing a different `MASTER_KEY`, refusing a bad or wrong-domain certificate without touching the installed one, rotating the certificate, and project routes coming back after Caddy restarts; and `iptables-restore --test` on the generated `DOCKER-USER` rules. Still to do on a VM: the apt and ufw steps, and checking that only 22 and 443 are open.
+- [x] `TLS_MODE=origin-cert` with the Cloudflare origin certificate for `*.hiranyey.dev`: `src/caddy/base-config.ts` writes Caddy's base config (TLS on :443, no ACME, h1/h2 only), and a test keeps `dev/caddy/caddy.json` the same as its plain HTTP form. Checked over HTTPS with a self-signed stand-in: `/healthz`, the login redirect, the 404 for unknown hosts and a webhook deploy.
+- [ ] Clerk production instance with signup disabled. Vibeship also checks `ADMIN_EMAILS` (verified emails only) at login, and bootstrap requires it.
+- [ ] RepoFlow registry configured with a read-only token (in the UI under Registries, once the server is up).
+- [x] Sample GitHub Actions workflow that builds, pushes to RepoFlow and posts the digest to the project's webhook URL: `examples/github-actions/deploy.yml`. Its deploy step was run against the dev stack.
 - [ ] Run `bootstrap.sh` on the VM and log in at `vibeship.hiranyey.dev`.
 
 **Done when** the spec's "Done means" holds in production:

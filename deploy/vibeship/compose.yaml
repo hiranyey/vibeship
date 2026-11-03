@@ -1,0 +1,27 @@
+# Vibeship for production, written to /opt/stack/vibeship by
+# scripts/bootstrap.sh. Its .env (mode 600) is both the container's
+# environment and where compose reads VIBESHIP_IMAGE and STACK_ROOT from.
+# No port is published: Caddy reaches it as vibeship:3000 on `web`.
+name: vibeship
+
+services:
+  vibeship:
+    image: ${VIBESHIP_IMAGE:?set VIBESHIP_IMAGE in .env}
+    env_file: .env
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Same path inside and out, because compose resolves bind mounts against host paths.
+      - ${STACK_ROOT:?set STACK_ROOT in .env}:${STACK_ROOT}
+    networks:
+      - web
+      - caddy-admin
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: { max-size: 10m, max-file: "5" }
+
+networks:
+  web:
+    external: true
+  caddy-admin:
+    external: true

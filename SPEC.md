@@ -111,7 +111,7 @@ Caddy runs as its own container with its admin API listening on port 2019 only o
 
 ## Auth and secrets
 
-- Browser login is OIDC authorization code with PKCE against Clerk. The Clerk app has a single user and signup disabled, so anyone who completes the login is the admin, and Vibeship keeps no allowlist of its own. Signup must stay disabled in Clerk.
+- Browser login is OIDC authorization code with PKCE against Clerk. The Clerk app has a single user and signup disabled, so anyone who completes the login is the admin. As a second check, Vibeship only accepts the verified emails in `ADMIN_EMAILS` (bootstrap requires it), so a Clerk misconfiguration alone doesn't hand out the server; refused logins are audited as `auth.refused`.
 - Sessions are random tokens in an HttpOnly, Secure, SameSite=Lax cookie, stored hashed in `sessions`.
 - Agents use bearer API tokens created in the UI, shown once, stored as SHA-256 hashes, with scope read, deploy or admin and an optional expiry.
 - Env values and registry tokens are encrypted with AES-256-GCM using `MASTER_KEY`, 32 random bytes in base64 set in Vibeship's `.env` (generate one with `npm run gen-key`). Keep a copy outside the VM, such as in a password manager: without it, stored secrets cannot be decrypted. Secret values are write-only in the UI and MCP.
@@ -191,13 +191,15 @@ Pages are rendered on the server by Hono with HTML templates from `hono/html`, l
 
 ## Bootstrap and packaging
 
-1. **Install Docker**: `bootstrap.sh` on fresh Debian installs Docker Engine and the compose plugin, and enables unattended security updates.
-2. **Networks and folders**: create the `web` network, the internal `caddy-admin` network, and `/opt/stack/{caddy,vibeship}`.
-3. **Caddy**: write its compose file (joining `web` and `caddy-admin`) and a base config with the admin API bound to the `caddy-admin` network only.
-4. **Vibeship**: write `.env` with mode 600 (OIDC settings and a newly generated `MASTER_KEY`, unless one is passed in to restore an existing database), and start the container with no published port; Caddy routes `vibeship.hiranyey.dev` to it.
-5. **Firewall**: allow only 22 and 443; 443 can be limited to Cloudflare ranges.
+`scripts/bootstrap.sh` sets up a fresh Debian server and is safe to run again (it is also how Vibeship is updated, after `git pull`). The steps are in [PRODUCTION.md](PRODUCTION.md); in short:
 
-The image is built on `node:26-slim` with the Docker CLI and compose plugin. It mounts `/var/run/docker.sock` and binds `/opt/stack` at the same path, because compose resolves relative bind mounts against host paths. Vibeship never redeploys itself; it is updated by hand. The repo ships a sample GitHub Actions workflow that builds, pushes to RepoFlow and POSTs the digest to the project's webhook URL, kept as a repository secret.
+1. **Install Docker**: Docker Engine and the compose plugin from Docker's apt repository, unattended security updates, and container logs capped at 5 × 10 MB.
+2. **Networks and folders**: create the `web` network, the internal `caddy-admin` network, and `/opt/stack/{caddy,vibeship}`.
+3. **Caddy**: copy in the Cloudflare origin certificate (checked against its key and `*.BASE_DOMAIN` before it replaces anything), write `caddy.json` from `src/caddy/base-config.ts` (TLS on :443 only, no ACME, no HTTP/3, admin API bound to the `caddy-admin` network only) and `deploy/caddy/compose.yaml`. Caddy restarts only when its config or certificate changed.
+4. **Vibeship**: build the image from the checkout, write `.env` with mode 600 (OIDC settings, `ADMIN_EMAILS`, and a newly generated `MASTER_KEY`, unless one is passed in to restore an existing database; an existing key is never replaced), and start `deploy/vibeship/compose.yaml` with no published port; Caddy routes `vibeship.hiranyey.dev` to it.
+5. **Firewall**: ufw allows only SSH and 443. With `CLOUDFLARE_ONLY=1`, 443 is limited to Cloudflare's ranges in ufw and in Docker's `DOCKER-USER` chain, since ports Docker publishes bypass ufw's own rules.
+
+The image is built on `node:26-slim` with the Docker CLI and compose plugin. It mounts `/var/run/docker.sock` and binds `/opt/stack` at the same path, because compose resolves relative bind mounts against host paths. Vibeship never redeploys itself; it is updated by hand. The repo ships a sample GitHub Actions workflow, `examples/github-actions/deploy.yml`, that builds, pushes to RepoFlow and POSTs the digest to the project's webhook URL, kept as a repository secret.
 
 ## Local development and testing
 
@@ -240,7 +242,7 @@ The whole stack runs on a laptop with Docker Desktop or OrbStack. Nothing in the
 
 **In the MVP**
 
-- Clerk login, single admin
+- Clerk login, single admin (with an `ADMIN_EMAILS` check)
 - Image and compose projects
 - Generated folders and Caddy routes
 - Encrypted env vars

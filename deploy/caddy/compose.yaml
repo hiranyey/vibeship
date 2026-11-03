@@ -1,0 +1,38 @@
+# Caddy for production, written to /opt/stack/caddy by scripts/bootstrap.sh
+# next to caddy.json (from src/caddy/base-config.ts) and certs/.
+name: caddy
+
+services:
+  caddy:
+    image: caddy:2.11.6
+    command: caddy run --config /etc/caddy/caddy.json
+    ports:
+      # The only port published to the world. Cloudflare connects here with
+      # the origin certificate; projects can publish on 127.0.0.1 only.
+      - 443:443/tcp
+    volumes:
+      - ./caddy.json:/etc/caddy/caddy.json:ro
+      - ./certs:/etc/caddy/certs:ro
+      - data:/data
+      - config:/config
+    networks:
+      web: {}
+      caddy-admin:
+        # The admin API binds to this address only, so it is unreachable
+        # from `web`, where project containers live.
+        ipv4_address: 172.31.250.2
+        aliases: [caddy-api]
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: { max-size: 10m, max-file: "5" }
+
+networks:
+  web:
+    external: true
+  caddy-admin:
+    external: true
+
+volumes:
+  data:
+  config:

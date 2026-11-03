@@ -60,7 +60,7 @@ function provider() {
 async function loginWith(p: ReturnType<typeof provider>, claims: Record<string, unknown> = {}) {
   const { url, attempt } = await p.client.start();
   const now = Math.floor(Date.now() / 1000);
-  p.state.claims = { iss: ISSUER, sub: 'user_1', aud: CLIENT_ID, exp: now + 300, iat: now, nonce: attempt.nonce, email: 'me@example.com', name: 'Me', ...claims };
+  p.state.claims = { iss: ISSUER, sub: 'user_1', aud: CLIENT_ID, exp: now + 300, iat: now, nonce: attempt.nonce, email: 'me@example.com', email_verified: true, name: 'Me', ...claims };
   return { url: new URL(url), attempt, identity: () => p.client.finish('the-code', attempt) };
 }
 
@@ -82,7 +82,7 @@ test('start sends the browser to the provider with PKCE, state and nonce', async
 test('finish exchanges the code with the verifier and returns the verified identity', async () => {
   const p = provider();
   const { attempt, identity } = await loginWith(p);
-  assert.deepEqual(await identity(), { sub: 'user_1', email: 'me@example.com', name: 'Me' });
+  assert.deepEqual(await identity(), { sub: 'user_1', email: 'me@example.com', emailVerified: true, name: 'Me' });
   const req = p.state.tokenRequests[0]!;
   assert.equal(req.get('grant_type'), 'authorization_code');
   assert.equal(req.get('code'), 'the-code');
@@ -93,13 +93,13 @@ test('finish exchanges the code with the verifier and returns the verified ident
 
 test('missing email and name come from userinfo when its subject matches', async () => {
   const p = provider();
-  p.state.userinfo = { sub: 'user_1', email: 'info@example.com', name: 'Info' };
-  const { identity } = await loginWith(p, { email: undefined, name: undefined });
-  assert.deepEqual(await identity(), { sub: 'user_1', email: 'info@example.com', name: 'Info' });
+  p.state.userinfo = { sub: 'user_1', email: 'info@example.com', email_verified: 'true', name: 'Info' };
+  const { identity } = await loginWith(p, { email: undefined, email_verified: undefined, name: undefined });
+  assert.deepEqual(await identity(), { sub: 'user_1', email: 'info@example.com', emailVerified: true, name: 'Info' });
 
   p.state.userinfo = { sub: 'someone_else', email: 'x@example.com' };
   const again = await loginWith(p, { email: undefined, name: undefined });
-  assert.deepEqual(await again.identity(), { sub: 'user_1', email: '', name: null });
+  assert.deepEqual(await again.identity(), { sub: 'user_1', email: '', emailVerified: false, name: null });
 });
 
 const rejects: Array<[string, (p: ReturnType<typeof provider>) => Record<string, unknown>, RegExp]> = [

@@ -1,0 +1,77 @@
+# Builds the app, pushes it to RepoFlow and asks Vibeship to deploy that exact
+# digest. Copy it to .github/workflows/deploy.yml in the app's repository.
+#
+# Set up once:
+# - In Vibeship, create an image project whose image is IMAGE:latest (below),
+#   and create its webhook URL on the project's Settings tab.
+# - In the repository's Settings > Secrets and variables > Actions, add:
+#     REPOFLOW_USERNAME, REPOFLOW_TOKEN  a RepoFlow login that can push
+#     VIBESHIP_WEBHOOK_URL               the webhook URL (it is a secret: anyone
+#                                        holding it can deploy this project)
+#
+# Vibeship pulls IMAGE@<digest>, health checks it and only then routes traffic
+# to it; if it fails, the previous version keeps serving and the run below
+# still succeeds (the webhook only queues the deploy). Watch the deploy in the
+# Vibeship UI, or with get_deploy_logs over MCP.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deploy at a time; a newer push waits for the one in flight.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+env:
+  REGISTRY: repoflow.hiranyey.dev
+  # Change this to the app's repository in RepoFlow.
+  IMAGE: repoflow.hiranyey.dev/library/my-app
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REPOFLOW_USERNAME }}
+          password: ${{ secrets.REPOFLOW_TOKEN }}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          # The server's architecture.
+          platforms: linux/amd64
+          # A plain image manifest, without attestations.
+          provenance: false
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Deploy
+        env:
+          WEBHOOK_URL: ${{ secrets.VIBESHIP_WEBHOOK_URL }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          test -n "$WEBHOOK_URL" || { echo "::error::Add the VIBESHIP_WEBHOOK_URL secret"; exit 1; }
+          body=$(jq -nc --arg digest "$DIGEST" --arg image "$IMAGE" '{digest: $digest, image: $image}')
+          curl --fail-with-body -sS --retry 3 --retry-all-errors \
+            -X POST "$WEBHOOK_URL" -H 'Content-Type: application/json' -d "$body"
+          echo
+          echo "Queued a deploy of $IMAGE@$DIGEST" >> "$GITHUB_STEP_SUMMARY"

@@ -24,6 +24,8 @@ const EnvSchema = z.object({
   OIDC_ISSUER: z.url().optional(),
   OIDC_CLIENT_ID: z.string().min(1).optional(),
   OIDC_CLIENT_SECRET: z.string().min(1).optional(),
+  // Comma-separated emails allowed to log in. Empty: anyone the provider lets through.
+  ADMIN_EMAILS: z.string().optional(),
 });
 
 export type Config = {
@@ -40,6 +42,11 @@ export type Config = {
   caddyAdminUrl: string;
   /** Null when OIDC isn't configured: browser login is then off and only API tokens work. */
   oidc: { issuer: string; clientId: string; clientSecret: string; redirectUri: string } | null;
+  /**
+   * Lowercased emails allowed to log in, checked on top of the provider's own
+   * rules. Empty means anyone who can log in at the provider is admin.
+   */
+  adminEmails: string[];
 };
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -68,6 +75,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     baseDomain: e.BASE_DOMAIN,
     tlsMode: e.TLS_MODE,
     caddyAdminUrl: e.CADDY_ADMIN_URL.replace(/\/+$/, ''),
+    adminEmails: (e.ADMIN_EMAILS ?? '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean),
     oidc: e.OIDC_ISSUER && e.OIDC_CLIENT_ID && e.OIDC_CLIENT_SECRET
       ? {
           issuer: e.OIDC_ISSUER,
