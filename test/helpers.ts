@@ -7,17 +7,36 @@ import type { RequestContext } from '../src/actor.ts';
 import { Db } from '../src/db/db.ts';
 import { migrate } from '../src/db/migrate.ts';
 import { createServices } from '../src/services/index.ts';
+import { FakeCaddy, FakeDocker } from './fakes.ts';
 
 export const BASE_DOMAIN = 'localhost';
 
-/** A migrated in-memory database with the service layer on top. */
-export function setup() {
+/** Fast health timing so failing deploys finish in milliseconds. */
+export const FAST_TIMING = { timeoutMs: 300, pollMs: 5, stableMs: 20 };
+
+/**
+ * A migrated in-memory database with the service layer on top, wired to a
+ * fake Docker and Caddy and a temporary STACK_ROOT (removed after the test
+ * when `t` is given).
+ */
+export function setup(t?: TestContext) {
   const db = new Db(':memory:');
   migrate(db);
   const userId = db.run(`INSERT INTO users (oidc_sub, email) VALUES ('user_1', 'me@example.com')`).lastInsertRowid;
   const ctx: RequestContext = { actor: { type: 'user', userId }, ip: '127.0.0.1' };
-  const services = createServices({ db, config: { baseDomain: BASE_DOMAIN, masterKey: randomBytes(32) } });
-  return { db, ctx, userId, ...services };
+  const stackRoot = mkdtempSync(join(tmpdir(), 'vibeship-stack-'));
+  t?.after(() => rmSync(stackRoot, { recursive: true, force: true }));
+  const docker = new FakeDocker();
+  const caddy = new FakeCaddy();
+  const services = createServices({
+    db,
+    config: { baseDomain: BASE_DOMAIN, masterKey: randomBytes(32), stackRoot, caddyAdminUrl: 'http://caddy-api:2019' },
+    docker,
+    caddy,
+    probe: docker.probe,
+    timing: FAST_TIMING,
+  });
+  return { ...services, db, ctx, userId, stackRoot, fakeDocker: docker, fakeCaddy: caddy };
 }
 
 export function tempDir(t: TestContext): string {

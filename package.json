@@ -14,7 +14,9 @@
     "typecheck": "tsc",
     "test": "node --test 'test/**/*.test.ts'",
     "check": "npm run typecheck && npm test",
-    "gen-key": "node src/crypto/master-key.ts"
+    "gen-key": "node src/crypto/master-key.ts",
+    "fixtures": "scripts/fixtures.sh",
+    "test:integration": "node --test --test-concurrency=1 'test/integration/*.itest.ts'"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.6",

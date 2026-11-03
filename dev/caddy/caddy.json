@@ -14,6 +14,10 @@
               "@id": "vibeship-ui",
               "match": [{ "host": ["vibeship.localhost"] }],
               "handle": [{ "handler": "reverse_proxy", "upstreams": [{ "dial": "vibeship:3000" }] }]
+            },
+            {
+              "@id": "not-found",
+              "handle": [{ "handler": "static_response", "status_code": 404, "body": "No app is deployed at this address.\n" }]
             }
           ]
         }

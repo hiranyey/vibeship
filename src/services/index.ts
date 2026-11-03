@@ -1,24 +1,57 @@
+import { type CaddyApi, CaddyClient } from '../caddy/client.ts';
 import type { Config } from '../config.ts';
 import { SecretBox } from '../crypto/secret-box.ts';
 import type { Db } from '../db/db.ts';
+import { DeployEngine } from '../deploy/engine.ts';
+import { ProjectFiles } from '../deploy/files.ts';
+import { fetchProbe, type HealthTiming, type HttpProbe } from '../deploy/health.ts';
+import { DeployLogs } from '../deploy/logs.ts';
+import { DeployQueue } from '../deploy/queue.ts';
+import { RouteSync } from '../deploy/routes.ts';
+import { CliDockerRunner } from '../docker/cli-runner.ts';
+import type { DockerRunner } from '../docker/runner.ts';
 import { AuditLog } from './audit.ts';
+import { DeployService } from './deploys.ts';
 import { EnvService } from './env.ts';
 import { ProjectService } from './projects.ts';
+import { RegistryService } from './registries.ts';
+import { SettingsService } from './settings.ts';
 
 /** The service layer shared by the UI, the HTTP API, the webhook receiver and MCP. */
-export type Services = {
-  audit: AuditLog;
-  projects: ProjectService;
-  env: EnvService;
-};
+export type Services = ReturnType<typeof createServices>;
 
-export function createServices(deps: { db: Db; config: Pick<Config, 'baseDomain' | 'masterKey'> }): Services {
-  const { db } = deps;
+export function createServices(deps: {
+  db: Db;
+  config: Pick<Config, 'baseDomain' | 'masterKey' | 'stackRoot' | 'caddyAdminUrl'>;
+  /** Fakes for tests; real implementations by default. */
+  docker?: DockerRunner;
+  caddy?: CaddyApi;
+  probe?: HttpProbe;
+  timing?: Partial<HealthTiming>;
+  /** False for processes that share the database but must leave deploys to the server. */
+  runDeploys?: boolean;
+}) {
+  const { db, config } = deps;
   const audit = new AuditLog(db);
-  const box = new SecretBox(deps.config.masterKey);
-  return {
-    audit,
-    projects: new ProjectService({ db, audit, baseDomain: deps.config.baseDomain }),
-    env: new EnvService({ db, audit, box }),
-  };
+  const box = new SecretBox(config.masterKey);
+  const docker = deps.docker ?? new CliDockerRunner();
+  const caddy = deps.caddy ?? new CaddyClient(config.caddyAdminUrl);
+
+  const projects = new ProjectService({ db, audit, baseDomain: config.baseDomain });
+  const env = new EnvService({ db, audit, box });
+  const registries = new RegistryService({ db, audit, box });
+  const settings = new SettingsService({ db, audit });
+  const logs = new DeployLogs(db);
+  const files = new ProjectFiles({ db, stackRoot: config.stackRoot });
+
+  const engine = new DeployEngine({
+    db, projects, env, registries, settings, logs, files, docker, caddy,
+    probe: deps.probe ?? fetchProbe,
+    timing: deps.timing,
+  });
+  const queue = new DeployQueue({ db, engine, enabled: deps.runDeploys });
+  const routes = new RouteSync({ db, caddy });
+  const deploys = new DeployService({ db, audit, projects, engine, queue, logs, files, docker, caddy });
+
+  return { audit, projects, env, registries, settings, deploys, engine, queue, routes, files, docker };
 }

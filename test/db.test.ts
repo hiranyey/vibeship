@@ -58,11 +58,11 @@ test('the database is usable again after a rollback', () => {
 
 test('migrate creates every table and seeds settings', () => {
   const db = new Db(':memory:');
-  assert.deepEqual(migrate(db), [1]);
+  assert.deepEqual(migrate(db), [1, 2]);
   const tables = db.all<{ name: string }>(`SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name`).map((r) => r.name);
   for (const t of [
     'api_tokens', 'audit_log', 'compose_versions', 'deploy_logs', 'deploys', 'env_vars', 'image_sources',
-    'projects', 'registries', 'routes', 'schema_migrations', 'sessions', 'settings', 'users',
+    'projects', 'registries', 'rendered_files', 'routes', 'schema_migrations', 'sessions', 'settings', 'users',
   ]) {
     assert.ok(tables.includes(t), `missing table ${t}`);
   }

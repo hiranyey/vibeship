@@ -41,21 +41,22 @@ Phases 5 and 6 both sit on top of the service layer from phases 1 to 4 and can b
 
 ## Phase 2: Deploy engine for image projects
 
-- [ ] `DockerRunner` interface with a real implementation (shells out to `docker` and `docker compose`) and a fake one for tests.
-- [ ] Registry client for the local registry: pull by digest with a read-only token, and look up which repository a digest belongs to.
-- [ ] Render `compose.yaml` and `.env` from the database into `STACK_ROOT/<project>/`, with the routed container on `web` under the `<project>` alias.
-- [ ] Deploy steps: pull, render, `up -d`, health check with a timeout, route, and fail safe back to the last healthy version.
-- [ ] Every step's output streamed into `deploy_logs`.
-- [ ] An in-process queue that runs one deploy at a time per project.
-- [ ] Recovery on boot: interrupted `running` deploys are marked `failed` and the last healthy version is restored if needed, then `queued` deploys run again in order.
-- [ ] Caddy client: add, update and delete one route by `@id`, and rebuild every route from the database on boot.
-- [ ] Drift check: compare the files on disk with what the database would generate.
-- [ ] Fixture images in `examples/`: `hello`, `crash`, `unhealthy` and `probe`, built and pushed by `npm run fixtures`.
+- [x] `DockerRunner` interface with a real implementation (shells out to `docker` and `docker compose`) and a fake one for tests.
+- [x] Registry access through the Docker daemon: pulls by tag or digest with the registry's read-only token in a throwaway `DOCKER_CONFIG`. Pulling `<repository>@<digest>` is also the check that a digest belongs to the project's repository.
+- [x] Render `compose.yaml` and `.env` from the database into `STACK_ROOT/<project>/`, with the routed container on `web` under the `<project>` alias.
+- [x] Deploy steps: pull, render, `up -d`, health check with a timeout, route, and fail safe back to the last healthy version.
+- [x] Every step's output streamed into `deploy_logs`.
+- [x] An in-process queue that runs one deploy at a time per project.
+- [x] Recovery on boot: interrupted `running` deploys are marked `failed` and the last healthy version is restored if needed, then `queued` deploys run again in order.
+- [x] Caddy client: add, update and delete one route by `@id`, and rebuild every route from the database on boot.
+- [x] Drift check: compare the files on disk with what the database would generate.
+- [x] Fixture images in `examples/fixture/`: `hello`, `hello-v2`, `crash`, `unhealthy`, `slow` and `probe`, built and pushed by `npm run fixtures`.
+- [x] Temporary dev CLI (`src/dev-cli.ts`) that queues deploys for the server to run; replaced by the HTTP API in phase 3.
 
 **Done when** these pass:
 
 - Unit tests of the deploy steps against the fake Docker, simulating a crash, a timeout and an unhealthy container.
-- Integration tests, run with a temporary script before the API exists:
+- Integration tests (`npm run test:integration`), driving the dev CLI before the API exists:
   - `hello` deploys and answers at `hello.localhost:8080`.
   - Deploying `crash` or `unhealthy` over it brings `hello` back.
   - Killing Vibeship mid-deploy recovers correctly.
@@ -68,7 +69,9 @@ Phases 5 and 6 both sit on top of the service layer from phases 1 to 4 and can b
 - [ ] Sessions: random tokens in a secure cookie, stored hashed.
 - [ ] API tokens: create (shown once), list and revoke, stored as SHA-256 hashes, with scope read, deploy or admin and an optional expiry.
 - [ ] Middleware that accepts a session or a bearer token and checks scope on each route.
-- [ ] Every HTTP API route in the spec, validated with the shared Zod schemas.
+- [ ] Every HTTP API route in the spec, validated with the shared Zod schemas. Deleting a project goes through `DeployService.removeProject`, which also stops containers and drops the route.
+- [ ] Vibeship itself enforces auth on every route: apps on `web` can reach `vibeship:3000` directly, without going through Caddy.
+- [ ] Remove `src/dev-cli.ts` and move the integration tests onto the API.
 - [ ] Server-sent events streams for deploy logs and container logs.
 - [ ] Per-project webhooks: generate or rotate the token (shown once), `POST /hooks/deploy/:token`, and reject digests that don't belong to the project's image.
 - [ ] Caddy access log for the Vibeship host leaves out `/hooks/`.
@@ -100,7 +103,7 @@ Phases 5 and 6 both sit on top of the service layer from phases 1 to 4 and can b
 
 ## Phase 6: Web UI
 
-- [ ] `vibeship.css`, `components.html` and `DESIGN-SYSTEM.md` in the Ink & Grid theme.
+- [ ] `vibeship.css`and `DESIGN-SYSTEM.html` in the Ink & Grid theme.
 - [ ] Layout: sidebar, dense tables, status pills, rendered on the server with `hono/html`.
 - [ ] Dashboard listing every project with status, hostname, current version and last deploy.
 - [ ] Project page with tabs: overview, deploys, logs, env, compose (YAML editor and version history) and settings (including webhook URL and drift warnings).
