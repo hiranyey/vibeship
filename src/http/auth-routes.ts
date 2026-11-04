@@ -1,12 +1,12 @@
 import { timingSafeEqual } from 'node:crypto';
 import { type Context, Hono } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
-import { html } from 'hono/html';
+import { html, raw } from 'hono/html';
 import { systemContext } from '../actor.ts';
 import type { OidcClient, LoginAttempt } from '../auth/oidc.ts';
 import type { Config } from '../config.ts';
 import type { Services } from '../services/index.ts';
-import { CSP } from '../ui/view.ts';
+import { CSP, ICON_LINKS } from '../ui/view.ts';
 import { type AppEnv, cookieSettings } from './auth.ts';
 
 const LOGIN_TTL_S = 10 * 60;
@@ -31,15 +31,15 @@ function page(c: Context<AppEnv>, opts: { title: string; host: string; status?: 
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>${opts.title} · Vibeship</title>
+        ${raw(ICON_LINKS)}
         <link rel="stylesheet" href="/static/vibeship.css" />
       </head>
       <body class="auth-page">
         <main class="card card-pad auth-card">
           <div class="topbar-brand">
-            <div class="brand-mark" aria-hidden="true">VS</div>
+            <img class="brand-mark" src="/static/vibeship-mark.svg" alt="" width="28" height="28" />
             <div>
               <div class="brand-title">Vibeship</div>
-              <div class="brand-sub">${opts.host}</div>
             </div>
           </div>
           <h1 class="auth-title">${opts.title}</h1>

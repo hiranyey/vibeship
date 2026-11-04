@@ -177,17 +177,8 @@ a:hover { text-decoration: underline; }
 .brand-mark {
   width: 28px;
   height: 28px;
-  border-radius: var(--radius-md);
-  background: var(--accent);
-  color: var(--on-accent);
-  border: var(--border-width) solid var(--border);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  font-weight: var(--weight-bold);
-  overflow: hidden;
+  display: block;
+  flex-shrink: 0;
 }
 
 .brand-title { font-weight: var(--weight-bold); font-size: var(--text-base); }

@@ -40,6 +40,7 @@ services:
     volumes:
       - ./src:/app/src
       - ./vibeship.css:/app/vibeship.css:ro
+      - ./brand:/app/brand:ro
       - /var/run/docker.sock:/var/run/docker.sock
       # Same path inside and out, because compose resolves bind mounts against host paths.
       - ${STACK_ROOT}:${STACK_ROOT}

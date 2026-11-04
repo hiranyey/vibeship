@@ -16,9 +16,25 @@ export function isUiPath(path: string): boolean {
   return !/^\/(api|mcp|hooks|auth|static|healthz)(\/|$)/.test(path);
 }
 
+const brand = (file: string) => new URL(`../../brand/${file}`, import.meta.url);
+
 const STATIC: Record<string, { file: URL; type: string }> = {
   'vibeship.css': { file: new URL('../../vibeship.css', import.meta.url), type: 'text/css; charset=utf-8' },
   'ui.js': { file: new URL('./static/ui.js', import.meta.url), type: 'text/javascript; charset=utf-8' },
+  'vibeship-mark.svg': { file: brand('vibeship-mark.svg'), type: 'image/svg+xml' },
+};
+
+/** Icons browsers and the web manifest ask for at the site root, from `brand/`. */
+const ROOT_ICONS: Record<string, { file: URL; type: string }> = {
+  'favicon.ico': { file: brand('favicon.ico'), type: 'image/x-icon' },
+  'favicon.svg': { file: brand('favicon.svg'), type: 'image/svg+xml' },
+  'favicon-16.png': { file: brand('favicon-16.png'), type: 'image/png' },
+  'favicon-32.png': { file: brand('favicon-32.png'), type: 'image/png' },
+  'apple-touch-icon.png': { file: brand('apple-touch-icon.png'), type: 'image/png' },
+  'icon-192.png': { file: brand('icon-192.png'), type: 'image/png' },
+  'icon-512.png': { file: brand('icon-512.png'), type: 'image/png' },
+  'icon-512-maskable.png': { file: brand('icon-512-maskable.png'), type: 'image/png' },
+  'site.webmanifest': { file: brand('site.webmanifest'), type: 'application/manifest+json' },
 };
 
 /**
@@ -31,15 +47,17 @@ export function uiRoutes(deps: { config: Config; services: Services }): { app: H
   const app = new Hono<AppEnv>();
 
   // Read once at startup; in development node --watch restarts on changes to src/.
-  const assets = Object.fromEntries(Object.entries(STATIC).map(([name, { file, type }]) => [name, { body: readFileSync(file), type }]));
-  app.get('/static/:file', (c) => {
-    const asset = assets[c.req.param('file')];
+  const load = (files: typeof STATIC) => Object.fromEntries(Object.entries(files).map(([name, { file, type }]) => [name, { body: readFileSync(file), type }]));
+  const assets = load(STATIC);
+  const send = (c: Context<AppEnv>, asset: { body: Buffer; type: string } | undefined) => {
     if (!asset) throw new AppError('not_found', 'Not found');
     c.header('Content-Type', asset.type);
     c.header('Cache-Control', 'public, max-age=300');
     c.header('X-Content-Type-Options', 'nosniff');
-    return c.body(asset.body);
-  });
+    return c.body(new Uint8Array(asset.body));
+  };
+  app.get('/static/:file', (c) => send(c, assets[c.req.param('file')]));
+  for (const [name, asset] of Object.entries(load(ROOT_ICONS))) app.get(`/${name}`, (c) => send(c, asset));
 
   const guard: MiddlewareHandler<AppEnv> = async (c, next) => {
     const p = c.get('principal');

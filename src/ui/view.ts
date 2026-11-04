@@ -16,6 +16,13 @@ type Flash = { kind: 'success' | 'danger' | 'info' | 'warning'; text: string };
  * Security headers for every UI page: scripts only from Vibeship itself
  * (`/ui.js`), no framing, and forms that can only post back here.
  */
+/** The `<head>` tags for the favicon, touch icon and manifest, shared by every page. */
+export const ICON_LINKS = `<link rel="icon" href="/favicon.ico" sizes="48x48" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+    <meta name="theme-color" content="#f3eee4" />`;
+
 export const CSP = [
   "default-src 'self'",
   "script-src 'self'",
@@ -115,6 +122,7 @@ export class View {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>${opts.title} · Vibeship</title>
+    ${raw(ICON_LINKS)}
     <link rel="stylesheet" href="/static/vibeship.css" />
     <script src="/static/ui.js" defer></script>
   </head>
@@ -122,10 +130,9 @@ export class View {
     <div class="app-shell">
       <header class="topbar">
         <a class="topbar-brand" href="/">
-          <div class="brand-mark" aria-hidden="true">VS</div>
+          <img class="brand-mark" src="/static/vibeship-mark.svg" alt="" width="28" height="28" />
           <div>
             <div class="brand-title">Vibeship</div>
-            <div class="brand-sub">${host}</div>
           </div>
         </a>
         <nav class="breadcrumb" aria-label="Breadcrumb">
@@ -135,9 +142,7 @@ export class View {
         </nav>
         <div class="topbar-right">
           ${user
-            ? html`<span class="badge">admin</span>
-                <span class="user-chip" title="${user.email}"><span class="avatar" aria-hidden="true">${initials(user.name ?? user.email)}</span> ${user.name ?? user.email}</span>
-                <form method="post" action="/auth/logout"><button class="btn btn-ghost btn-sm" type="submit">Log out</button></form>`
+            ? html`<form method="post" action="/auth/logout"><button class="btn btn-ghost btn-sm" type="submit">Log out</button></form>`
             : ''}
         </div>
       </header>

@@ -5,3 +5,5 @@ node_modules
 test
 *.md
 design-system.html
+brand/gen_brand.py
+brand/preview.png

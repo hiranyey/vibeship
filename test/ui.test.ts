@@ -319,3 +319,22 @@ test('parseEnvLines reads KEY=value lines', () => {
   assert.throws(() => parseEnvLines('A=1\nA=2', false), /A is set twice/);
   assert.throws(() => parseEnvLines('=1', false), /expected KEY=value/);
 });
+
+test('brand icons are served and every page uses the mark instead of a text badge', async (t) => {
+  const b = browser(t);
+  const mark = await b.app.request('/static/vibeship-mark.svg');
+  assert.equal(mark.status, 200);
+  assert.match(mark.headers.get('content-type')!, /image\/svg\+xml/);
+  for (const [path, type] of [['/favicon.ico', /image\/x-icon/], ['/favicon.svg', /svg/], ['/apple-touch-icon.png', /image\/png/], ['/icon-192.png', /image\/png/], ['/site.webmanifest', /manifest\+json/]] as const) {
+    const res = await b.app.request(path);
+    assert.equal(res.status, 200, path);
+    assert.match(res.headers.get('content-type')!, type);
+  }
+  const home = await (await b.get('/')).text();
+  assert.match(home, /<img class="brand-mark" src="\/static\/vibeship-mark\.svg"/);
+  assert.match(home, /<link rel="icon" href="\/favicon\.svg"/);
+  assert.doesNotMatch(home, />VS</);
+  const login = await (await b.app.request('/auth/login')).text();
+  assert.match(login, /vibeship-mark\.svg/);
+  assert.doesNotMatch(login, />VS</);
+});
