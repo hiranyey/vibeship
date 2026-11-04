@@ -42,7 +42,7 @@ function harness(t: TestContext, opts: { oidc?: OidcClient | null } = {}) {
 
 /** Logs in through the fake provider and returns the session cookie header. */
 async function login(h: ReturnType<typeof harness>, returnTo?: string): Promise<{ cookie: string; location: string }> {
-  const start = await h.call('GET', `/auth/login${returnTo ? `?returnTo=${encodeURIComponent(returnTo)}` : ''}`);
+  const start = await h.call('GET', `/auth/start${returnTo ? `?returnTo=${encodeURIComponent(returnTo)}` : ''}`);
   assert.equal(start.status, 302);
   const state = new URL(start.headers.get('location')!).searchParams.get('state')!;
   const loginCookie = start.headers.get('set-cookie')!.split(';')[0]!;
@@ -109,6 +109,7 @@ test('each scope is refused on routes above it', async (t) => {
     ['GET', '/api/tokens', 'admin'],
     ['POST', '/api/tokens', 'admin', { name: 'x', scope: 'read' }],
     ['POST', '/api/registries', 'admin', { name: 'local', url: 'http://localhost:5050' }],
+    ['PATCH', '/api/registries/1', 'admin', { name: 'local-renamed' }],
     ['PUT', '/api/settings/health_timeout_seconds', 'admin', { value: 30 }],
     ['GET', '/api/audit', 'admin'],
   ];
@@ -146,11 +147,25 @@ test('login with the provider starts a session that works as admin, and logout e
   assert.ok(actions.includes('auth.login') && actions.includes('auth.logout'));
 });
 
+test('the login page only shows a button; the flow starts when it is pressed', async (t) => {
+  const h = harness(t);
+  const res = await h.call('GET', '/auth/login?returnTo=%2Fprojects%2Fnew');
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('set-cookie'), null);
+  assert.match(await res.text(), /href="\/auth\/start\?returnTo=%2Fprojects%2Fnew"/);
+  assert.match(await (await h.call('GET', '/auth/login?returnTo=//evil.example.com')).text(), /href="\/auth\/start"/);
+
+  const { cookie } = await login(h);
+  const already = await h.call('GET', '/auth/login?returnTo=%2Fsettings', { cookie });
+  assert.equal(already.status, 302);
+  assert.equal(already.headers.get('location'), '/settings');
+});
+
 test('the callback refuses a missing login cookie, a wrong state and an open redirect', async (t) => {
   const h = harness(t);
   assert.equal((await h.call('GET', '/auth/callback?code=good&state=x')).status, 400);
 
-  const start = await h.call('GET', '/auth/login?returnTo=//evil.example.com');
+  const start = await h.call('GET', '/auth/start?returnTo=//evil.example.com');
   const loginCookie = start.headers.get('set-cookie')!.split(';')[0]!;
   assert.equal((await h.call('GET', '/auth/callback?code=good&state=wrong', { cookie: loginCookie })).status, 400);
   assert.equal((await h.call('GET', '/auth/callback?error=access_denied', { cookie: loginCookie })).status, 400);
@@ -166,6 +181,7 @@ test('the callback refuses a missing login cookie, a wrong state and an open red
 test('without OIDC settings, login says so and tokens still work', async (t) => {
   const h = harness(t, { oidc: null });
   assert.equal((await h.call('GET', '/auth/login')).status, 503);
+  assert.equal((await h.call('GET', '/auth/start')).status, 503);
   assert.equal((await h.call('GET', '/api/projects', { as: 'read' })).status, 200);
 });
 

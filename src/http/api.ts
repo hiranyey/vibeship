@@ -197,6 +197,7 @@ export function apiRoutes(deps: { config: Config; services: Services }): Hono<Ap
   // Registries and settings
   app.get('/registries', read, (c) => c.json(s.registries.list()));
   app.post('/registries', admin, async (c) => c.json(s.registries.create(principal(c).ctx, await body(c)), 201));
+  app.patch('/registries/:id', admin, async (c) => c.json(s.registries.update(principal(c).ctx, intParam(c.req.param('id'), 'Registry'), await body(c))));
   app.get('/settings', read, (c) => c.json({ health_timeout_seconds: s.settings.get('health_timeout_seconds') }));
   app.put('/settings/:key', admin, async (c) => {
     const key = c.req.param('key');

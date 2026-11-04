@@ -3,6 +3,7 @@ import { html, raw } from 'hono/html';
 import { AppError } from '../errors.ts';
 import { type AppEnv, principal } from '../http/auth.ts';
 import type { AuditEntry } from '../services/audit.ts';
+import type { Registry } from '../services/registries.ts';
 import type { Services } from '../services/index.ts';
 import { readForm } from './projects.ts';
 import { ago, alert, emptyRow, field, type Html, pageHeader, postButton, shownOnce, type View } from './view.ts';
@@ -34,10 +35,10 @@ export function adminPages(deps: { services: Services; view: View }): Hono<AppEn
       body: html`${pageHeader('Registries', 'Logins for pulling private images. A project uses the login whose host matches its image, unless it names one.')}
         <div class="table-wrap">
           <table class="table">
-            <thead><tr><th>Name</th><th>Host</th><th>URL</th><th>Login</th></tr></thead>
+            <thead><tr><th>Name</th><th>Host</th><th>URL</th><th>Login</th><th></th></tr></thead>
             <tbody>${list.length === 0
-              ? emptyRow(4, 'No registries. Public images need none.')
-              : list.map((r) => html`<tr><td class="cell-name">${r.name}</td><td class="cell-mono">${r.host}</td><td class="cell-mono">${r.url}</td><td>${r.username ? html`<span class="mono">${r.username}</span> · token set` : 'anonymous'}</td></tr>`)}</tbody>
+              ? emptyRow(5, 'No registries. Public images need none.')
+              : list.map((r) => html`<tr><td class="cell-name">${r.name}</td><td class="cell-mono">${r.host}</td><td class="cell-mono">${r.url}</td><td>${r.username ? html`<span class="mono">${r.username}</span> · token set` : 'anonymous'}</td><td class="cell-actions"><a class="btn btn-ghost btn-sm" href="/settings/registries/${r.id}">Edit</a></td></tr>`)}</tbody>
           </table>
         </div>
         ${error ? alert('danger', error, 'Not added') : ''}
@@ -64,6 +65,51 @@ export function adminPages(deps: { services: Services; view: View }): Hono<AppEn
       return view.redirect(c, '/settings/registries', 'success', `Added ${r.name}.`);
     } catch (err) {
       return registriesPage(c, f, message(err));
+    }
+  });
+
+  const registryById = (c: Context<AppEnv>) => {
+    const id = c.req.param('id');
+    if (!id || !/^\d{1,15}$/.test(id)) throw new AppError('not_found', 'Registry not found');
+    return s.registries.get(Number(id));
+  };
+
+  const editRegistryPage = (c: Context<AppEnv>, r: Registry, f?: Record<string, string>, error?: string) => {
+    const v = f ?? { name: r.name, url: r.url, username: r.username ?? '' };
+    return view.render(c, {
+      title: `Edit ${r.name}`,
+      nav: 'registries',
+      status: error ? 400 : 200,
+      crumbs: [{ label: 'Settings', href: '/settings' }, { label: 'Registries', href: '/settings/registries' }, { label: r.name }],
+      body: html`${pageHeader(`Edit ${r.name}`, 'Changes apply to the next pull. Projects that name this registry keep using it.')}
+        ${error ? alert('danger', error, 'Not saved') : ''}
+        <form class="card card-pad form-stack" method="post" action="/settings/registries/${r.id}">
+          <div class="form-grid">
+            ${field({ label: 'Name', name: 'name', value: v.name, required: true })}
+            ${field({ label: 'URL', name: 'url', value: v.url, required: true, mono: true })}
+            ${field({ label: 'Username', name: 'username', value: v.username, mono: true, help: 'Clear it to pull anonymously; that also removes the token.', attrs: 'autocomplete="off"' })}
+            ${field({
+              label: 'Token', name: 'token', type: 'password', mono: true,
+              help: r.hasToken ? 'Leave blank to keep the current token. Encrypted at rest and never shown again.' : 'Use a read-only token. Encrypted at rest and never shown again.',
+              attrs: 'autocomplete="new-password"',
+            })}
+          </div>
+          <div class="form-actions"><button class="btn btn-primary" type="submit">Save</button><a class="btn btn-ghost" href="/settings/registries">Cancel</a></div>
+        </form>`,
+    });
+  };
+
+  app.get('/settings/registries/:id', (c) => editRegistryPage(c, registryById(c)));
+  app.post('/settings/registries/:id', async (c) => {
+    const r = registryById(c);
+    const f = await readForm(c);
+    try {
+      const updated = s.registries.update(ctx(c), r.id, {
+        name: f.name, url: f.url, username: f.username?.trim() || null, token: f.token || undefined,
+      });
+      return view.redirect(c, '/settings/registries', 'success', `Saved ${updated.name}.`);
+    } catch (err) {
+      return editRegistryPage(c, r, f, message(err));
     }
   });
 

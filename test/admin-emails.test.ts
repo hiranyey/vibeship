@@ -26,7 +26,7 @@ function harness(t: TestContext, adminEmails: string | undefined, who: OidcIdent
   };
   const app = createApp({ config, db: s.db, services: s, oidc });
   const login = async () => {
-    const start = await app.request('/auth/login');
+    const start = await app.request('/auth/start');
     const loginCookie = start.headers.get('set-cookie')!.split(';')[0]!;
     return app.request('/auth/callback?code=c&state=st', { headers: { cookie: loginCookie } });
   };

@@ -266,12 +266,26 @@ test('tokens are shown once and can be revoked; registries and settings save', a
   const half = await b.post('/settings/registries', { name: 'Half', url: 'x.example.com', username: 'ci', token: '' });
   assert.equal(half.status, 400);
 
+  const regId = b.registries.list().find((x) => x.name === 'RepoFlow')!.id;
+  const edit = await (await b.get(`/settings/registries/${regId}`)).text();
+  assert.match(edit, /value="https:\/\/repoflow\.example\.com"/);
+  assert.match(edit, /Leave blank to keep the current token/);
+  const renamed = await b.follow(await b.post(`/settings/registries/${regId}`, { name: 'Repoflow', url: 'https://api.repoflow.io', username: 'deployer', token: '' }));
+  assert.match(renamed.text, /Saved Repoflow/);
+  assert.deepEqual(b.registries.authFor('api.repoflow.io/lib/app:1', null), { host: 'api.repoflow.io', username: 'deployer', password: 'tok' });
+  await b.follow(await b.post(`/settings/registries/${regId}`, { name: 'Repoflow', url: 'https://api.repoflow.io', username: '', token: '' }));
+  assert.equal(b.registries.get(regId).hasToken, false);
+  const noToken = await b.post(`/settings/registries/${regId}`, { name: 'Repoflow', url: 'https://api.repoflow.io', username: 'ci', token: '' });
+  assert.equal(noToken.status, 400);
+  assert.match(await noToken.text(), /token: required/);
+  assert.equal((await b.get('/settings/registries/999')).status, 404);
+
   assert.match((await b.follow(await b.post('/settings', { health_timeout_seconds: '120' }))).text, /Settings saved/);
   assert.equal(b.settings.get('health_timeout_seconds'), 120);
   assert.equal((await b.post('/settings', { health_timeout_seconds: '1' })).status, 400);
 
   const audit = await (await b.get('/settings/audit')).text();
-  for (const action of ['token.create', 'token.revoke', 'registry.create', 'settings.set']) assert.match(audit, new RegExp(action.replace('.', '\\.')));
+  for (const action of ['token.create', 'token.revoke', 'registry.create', 'registry.update', 'settings.set']) assert.match(audit, new RegExp(action.replace('.', '\\.')));
   assert.match(audit, /admin@example\.com/);
 });
 

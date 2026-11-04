@@ -18,6 +18,15 @@ export const CreateRegistryInput = z
   })
   .refine((v) => Boolean(v.username) === Boolean(v.token), 'set both username and token, or neither');
 
+export const UpdateRegistryInput = z.object({
+  name: z.string().trim().min(1).max(100).optional(),
+  url: z.string().trim().min(1).max(255).optional(),
+  /** Null removes the login (and its token), making pulls anonymous. */
+  username: z.string().min(1).max(255).nullable().optional(),
+  /** Omit to keep the stored token. */
+  token: z.string().min(1).max(4096).optional(),
+});
+
 export type Registry = { id: number; name: string; url: string; host: string; username: string | null; hasToken: boolean };
 
 type RegistryRow = { id: number; name: string; url: string; username: string | null; token_encrypted: string | null };
@@ -65,6 +74,49 @@ export class RegistryService {
       this.#audit.record(ctx, 'registry.create', `registry:${id}`, { name: input.name, host });
       return this.#view(this.#db.get<RegistryRow>('SELECT * FROM registries WHERE id = ?', id)!);
     });
+  }
+
+  get(id: number): Registry {
+    return this.#view(this.#row(id));
+  }
+
+  update(ctx: RequestContext, id: number, rawInput: unknown): Registry {
+    const input = parseInput(UpdateRegistryInput, rawInput);
+    return this.#db.transaction(() => {
+      const row = this.#row(id);
+      const name = input.name ?? row.name;
+      const url = input.url ?? row.url;
+      const host = registryHost(url);
+      if (this.#db.get('SELECT 1 FROM registries WHERE name = ? AND id != ?', name, id)) {
+        throw new AppError('conflict', `A registry named "${name}" already exists`);
+      }
+      if (this.list().some((r) => r.id !== id && r.host === host)) throw new AppError('conflict', `A registry for ${host} already exists`);
+
+      const username = input.username === undefined ? row.username : input.username;
+      let tokenEncrypted = row.token_encrypted;
+      if (username === null) {
+        if (input.token) throw new AppError('validation', 'set both username and token, or neither');
+        tokenEncrypted = null;
+      } else if (input.token) {
+        tokenEncrypted = this.#box.seal(input.token, `registry:${id}`);
+      } else if (!tokenEncrypted) {
+        throw new AppError('validation', 'token: required when setting a username');
+      }
+
+      this.#db.run(
+        'UPDATE registries SET name = ?, url = ?, username = ?, token_encrypted = ? WHERE id = ?',
+        name, url, username, tokenEncrypted, id,
+      );
+      const changed = Object.keys(input).filter((k) => k !== 'token' && input[k as keyof typeof input] !== undefined);
+      this.#audit.record(ctx, 'registry.update', `registry:${id}`, { name, host, changed, tokenChanged: Boolean(input.token) });
+      return this.#view(this.#row(id));
+    });
+  }
+
+  #row(id: number): RegistryRow {
+    const row = this.#db.get<RegistryRow>('SELECT * FROM registries WHERE id = ?', id);
+    if (!row) throw new AppError('not_found', `Registry ${id} not found`);
+    return row;
   }
 
   /**

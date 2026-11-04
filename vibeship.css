@@ -151,7 +151,6 @@ a:hover { text-decoration: underline; }
   flex-direction: column;
   min-height: 100vh;
   border: var(--border-width-key) solid var(--border);
-  border-radius: var(--radius-md);
   overflow: hidden;
   background: var(--bg);
 }
@@ -1259,3 +1258,24 @@ a.tab { text-decoration: none; display: inline-block; }
 .mt-0 { margin-top: 0; }
 [hidden] { display: none !important; }
 .sidebar-footer .mono { word-break: break-all; }
+
+/* ——— Login and other auth pages ——— */
+.auth-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  box-sizing: border-box;
+  background: var(--bg-sidebar);
+}
+.auth-card {
+  width: 100%;
+  max-width: 380px;
+  padding: var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.auth-title { margin: var(--space-2) 0 0; font-size: var(--text-xl); }
+.auth-button { width: 100%; box-sizing: border-box; text-align: center; justify-content: center; }
+.auth-button:hover { text-decoration: none; }
