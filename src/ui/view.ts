@@ -6,10 +6,11 @@ import type { Config } from '../config.ts';
 import type { AppEnv } from '../http/auth.ts';
 import { cookieSettings } from '../http/auth.ts';
 import { assetUrl } from './assets.ts';
+import { icon, type IconName } from './icons.ts';
 
 export type Html = HtmlEscapedString | Promise<HtmlEscapedString>;
 
-export type Nav = 'projects' | 'new' | 'registries' | 'tokens' | 'audit' | 'settings' | null;
+export type Nav = 'projects' | 'registries' | 'tokens' | 'audit' | 'settings' | null;
 
 type Flash = { kind: 'success' | 'danger' | 'info' | 'warning'; text: string };
 
@@ -36,13 +37,12 @@ export const CSP = [
   "object-src 'none'",
 ].join('; ');
 
-const NAV: Array<{ key: Exclude<Nav, null>; href: string; label: string }> = [
-  { key: 'projects', href: '/', label: 'Projects' },
-  { key: 'new', href: '/projects/new', label: 'New project' },
-  { key: 'registries', href: '/settings/registries', label: 'Registries' },
-  { key: 'tokens', href: '/settings/tokens', label: 'API tokens' },
-  { key: 'audit', href: '/settings/audit', label: 'Audit log' },
-  { key: 'settings', href: '/settings', label: 'Settings' },
+const NAV: Array<{ key: Exclude<Nav, null>; href: string; label: string; icon: IconName }> = [
+  { key: 'projects', href: '/', label: 'Projects', icon: 'projects' },
+  { key: 'registries', href: '/settings/registries', label: 'Registries', icon: 'registries' },
+  { key: 'tokens', href: '/settings/tokens', label: 'API tokens', icon: 'tokens' },
+  { key: 'audit', href: '/settings/audit', label: 'Audit log', icon: 'audit' },
+  { key: 'settings', href: '/settings', label: 'Settings', icon: 'settings' },
 ];
 
 export type PageOptions = {
@@ -143,18 +143,17 @@ export class View {
         </nav>
         <div class="topbar-right">
           ${user
-            ? html`<form method="post" action="/auth/logout"><button class="btn btn-ghost btn-sm" type="submit">Log out</button></form>`
+            ? html`<form method="post" action="/auth/logout"><button class="btn btn-ghost btn-sm" type="submit">${icon('logout', 14)}Log out</button></form>`
             : ''}
         </div>
       </header>
       <div class="shell-body">
         ${user
           ? html`<aside class="sidebar" aria-label="Primary">
-              <div class="label-caps">Navigate</div>
-              ${NAV.map((n) => html`<a class="nav-item${n.key === opts.nav ? ' is-active' : ''}" href="${n.href}"${n.key === opts.nav ? raw(' aria-current="page"') : ''}>${n.label}</a>`)}
-              <div class="sidebar-footer">
-                <div class="sidebar-footer-head">MCP ${copyButton(`${this.#config.publicUrl}/mcp`, 'Copy the MCP URL')}</div>
-                <span class="mono">${this.#config.publicUrl}/mcp</span>
+              ${NAV.map((n) => html`<a class="nav-item tooltip-wrap${n.key === opts.nav ? ' is-active' : ''}" href="${n.href}" aria-label="${n.label}"${n.key === opts.nav ? raw(' aria-current="page"') : ''}>${icon(n.icon, 18)}<span class="tooltip tooltip-right" aria-hidden="true">${n.label}</span></a>`)}
+              <div class="sidebar-footer tooltip-wrap">
+                <button class="nav-item" type="button" data-copy-text="${this.#config.publicUrl}/mcp" aria-label="Copy the MCP URL">${icon('mcp', 18)}</button>
+                <span class="tooltip tooltip-right" aria-hidden="true">Copy MCP URL · ${this.#config.publicUrl}/mcp</span>
               </div>
             </aside>`
           : ''}
@@ -282,10 +281,10 @@ export function textarea(opts: { label: string; name: string; value?: string | n
 }
 
 /** A one-button form that posts to `action`, optionally asking for confirmation first. */
-export function postButton(action: string, label: string, opts: { cls?: string; confirm?: string; hidden?: Record<string, string> } = {}): Html {
+export function postButton(action: string, label: string, opts: { cls?: string; confirm?: string; hidden?: Record<string, string>; icon?: IconName } = {}): Html {
   return html`<form class="inline-form" method="post" action="${action}"${opts.confirm ? html` data-confirm="${opts.confirm}"` : ''}>${
     Object.entries(opts.hidden ?? {}).map(([k, v]) => html`<input type="hidden" name="${k}" value="${v}" />`)
-  }<button class="btn ${opts.cls ?? 'btn-secondary'}" type="submit">${label}</button></form>`;
+  }<button class="btn ${opts.cls ?? 'btn-secondary'}" type="submit">${opts.icon ? icon(opts.icon, 14) : ''}${label}</button></form>`;
 }
 
 /** The "shown once" box for a new API token or webhook URL. */

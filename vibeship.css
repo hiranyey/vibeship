@@ -143,7 +143,7 @@
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
 
   /* Layout */
-  --sidebar-width: 220px;
+  --sidebar-width: 64px;
   --topbar-height: 56px;
   --shadow-none: none;
 
@@ -263,9 +263,10 @@ h1, h2, h3, .t-xl, .t-2xl, .brand-title, .card-title, .modal-title, .section-tit
 }
 
 .sidebar {
-  flex: 1 1 180px;
-  max-width: var(--sidebar-width);
-  min-width: 160px;
+  flex: 0 0 var(--sidebar-width);
+  width: var(--sidebar-width);
+  box-sizing: border-box;
+  align-items: center;
   background: var(--bg-sidebar);
   border-right: var(--border-width) solid var(--border);
   padding: var(--space-3);
@@ -275,10 +276,13 @@ h1, h2, h3, .t-xl, .t-2xl, .brand-title, .card-title, .modal-title, .section-tit
 }
 
 .nav-item {
-  display: block;
-  width: 100%;
-  text-align: left;
-  padding: var(--space-2) 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  box-sizing: border-box;
+  padding: 0;
   border-radius: var(--radius-md);
   border: var(--border-width) solid transparent;
   background: transparent;
@@ -287,7 +291,6 @@ h1, h2, h3, .t-xl, .t-2xl, .brand-title, .card-title, .modal-title, .section-tit
   font-size: var(--text-md);
   font-weight: var(--weight-regular);
   cursor: pointer;
-  overflow: hidden;
 }
 .nav-item:hover { background: var(--bg-muted); }
 .nav-item.is-active {
@@ -298,17 +301,9 @@ h1, h2, h3, .t-xl, .t-2xl, .brand-title, .card-title, .modal-title, .section-tit
 }
 .nav-item:focus-visible { box-shadow: var(--focus-ring); }
 
-.sidebar-footer {
-  margin-top: auto;
-  padding: 10px;
-  border-radius: var(--radius-md);
-  border: var(--border-width) solid var(--border);
-  background: var(--bg-muted);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  color: var(--text-muted);
-  overflow: hidden;
-}
+.sidebar-footer { margin-top: auto; }
+.sidebar-footer .nav-item { color: var(--text-muted); }
+.sidebar-footer .nav-item.is-copied { color: var(--success-text); }
 
 .main {
   flex: 1 1 420px;
@@ -1044,6 +1039,10 @@ code.inline {
 }
 .tooltip-wrap:hover .tooltip,
 .tooltip-wrap:focus-within .tooltip { opacity: 1; }
+.tooltip-right { left: calc(100% + 10px); bottom: auto; top: 50%; transform: translateY(-50%); font-weight: var(--weight-regular); }
+
+/* ——— Icons ——— */
+.icon { display: block; flex-shrink: 0; }
 
 /* ——— Avatar ——— */
 .avatar {
@@ -1314,7 +1313,6 @@ a.tab { text-decoration: none; display: inline-block; }
 .table .cell-wrap { white-space: normal; word-break: break-word; max-width: 420px; }
 .mt-0 { margin-top: 0; }
 [hidden] { display: none !important; }
-.sidebar-footer .mono { word-break: break-all; }
 
 /* ——— Login and other auth pages ——— */
 .auth-page {
@@ -1361,8 +1359,6 @@ a.tab { text-decoration: none; display: inline-block; }
 .copy-btn.is-copied .copy-icon { display: none; }
 .copy-btn.is-copied .check-icon { display: block; animation: pop var(--motion-fast) var(--ease-out); }
 .props-val .copyable .mono { font-size: var(--text-sm); font-weight: var(--weight-regular); }
-.sidebar-footer-head { display: flex; align-items: center; justify-content: space-between; margin: -4px 0 2px; }
-.sidebar-footer .copy-btn { width: 22px; height: 22px; }
 
 .filter-bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); }
 .filter-search { flex: 1 1 240px; max-width: 360px; }

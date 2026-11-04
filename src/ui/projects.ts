@@ -13,6 +13,7 @@ import {
   ago, alert, copyable, copyButton, duration, emptyRow, field, type Html, pageHeader, pill, postButton, shortDigest, shownOnce, textarea, type View,
 } from './view.ts';
 import { sideBySide } from './diff.ts';
+import { icon } from './icons.ts';
 import { hostPanel, projectPanel, usageCell } from './metrics.ts';
 
 type Tab = 'overview' | 'deploys' | 'logs' | 'env' | 'compose' | 'settings';
@@ -98,7 +99,7 @@ export function projectPages(deps: { config: Config; services: Services; view: V
       nav: 'projects',
       crumbs: [{ label: 'Projects' }],
       body: html`
-        ${pageHeader('Projects', 'Image and compose apps behind Caddy', html`<a class="btn btn-primary" href="/projects/new">New project</a>`)}
+        ${pageHeader('Projects', 'Image and compose apps behind Caddy', html`<a class="btn btn-primary" href="/projects/new">${icon('plus', 14)}New project</a>`)}
         <div class="stat-strip">
           <div class="stat"><div class="stat-label">Projects</div><div class="stat-value">${projects.length}</div></div>
           <div class="stat"><div class="stat-label">Running</div><div class="stat-value">${count('running')}</div></div>
@@ -122,7 +123,7 @@ export function projectPages(deps: { config: Config; services: Services; view: V
                 ? emptyRow(8, html`<div class="empty-state">
                     <div class="empty-title">No projects yet</div>
                     <p>Ship a container image or a compose file. Agents can create projects too, over MCP.</p>
-                    <a class="btn btn-primary btn-sm" href="/projects/new">New project</a>
+                    <a class="btn btn-primary btn-sm" href="/projects/new">${icon('plus', 14)}New project</a>
                   </div>`)
                 : rows.map(({ p, last }) => html`<tr data-filter-row data-name="${p.name} ${p.hostname}" data-status="${p.status}"${p.status === 'deploying' ? html` data-watch="/api/projects/${p.id}" data-watch-status="deploying"` : ''}>
                   <td class="cell-name"><a href="${base(p)}">${p.name}</a></td>
@@ -147,7 +148,7 @@ export function projectPages(deps: { config: Config; services: Services; view: V
     if (kind !== 'image' && kind !== 'compose') {
       return view.render(c, {
         title: 'New project',
-        nav: 'new',
+        nav: 'projects',
         crumbs: [{ label: 'Projects', href: '/' }, { label: 'New project' }],
         body: html`${pageHeader('New project', 'What does the app ship as?')}
           <div class="kind-choice">
@@ -165,7 +166,7 @@ export function projectPages(deps: { config: Config; services: Services; view: V
     const registries = s.registries.list();
     return view.render(c, {
       title: `New ${kind} project`,
-      nav: 'new',
+      nav: 'projects',
       status: error ? 400 : 200,
       crumbs: [{ label: 'Projects', href: '/' }, { label: 'New project', href: '/projects/new' }, { label: kind }],
       body: html`${pageHeader(`New ${kind} project`, kind === 'image' ? 'A container image from a registry' : 'A docker compose file')}
@@ -203,7 +204,7 @@ export function projectPages(deps: { config: Config; services: Services; view: V
           </div>
           <label class="checkbox"><input type="checkbox" name="deploy"${f.deploy === undefined || checked(f.deploy) ? raw(' checked') : ''} /> Deploy right away</label>
           <div class="form-actions">
-            <button class="btn btn-primary" type="submit">Create project</button>
+            <button class="btn btn-primary" type="submit">${icon('plus', 14)}Create project</button>
             <a class="btn btn-ghost" href="/projects/new">Back</a>
           </div>
         </form>`,
@@ -248,7 +249,7 @@ export function projectPages(deps: { config: Config; services: Services; view: V
       crumbs: [{ label: 'Projects', href: '/' }, { label: p.name, href: base(p) }, ...(tab === 'overview' ? [] : [{ label: tab }])],
       body: html`
         ${pageHeader(html`${p.name} <span${busy ? html` data-watch="/api/projects/${p.id}" data-watch-status="deploying"` : ''}>${pill(p.status)}</span>`, html`<a class="mono" href="${view.appUrl(p.hostname)}" rel="noopener noreferrer" target="_blank">${p.hostname}</a>${copyButton(view.appUrl(p.hostname), 'Copy the app URL')} · ${p.kind}`, html`
-          ${postButton(`${base(p)}/deploy`, busy ? 'Deploying…' : 'Deploy', { cls: 'btn-primary' })}
+          ${postButton(`${base(p)}/deploy`, busy ? 'Deploying…' : 'Deploy', { cls: 'btn-primary', icon: 'rocket' })}
           ${p.status === 'stopped'
             ? postButton(`${base(p)}/start`, 'Start')
             : html`${postButton(`${base(p)}/restart`, 'Restart')}${postButton(`${base(p)}/stop`, 'Stop', { confirm: `Stop ${p.name}? Its hostname answers 404 until you start it.` })}`}
@@ -506,7 +507,7 @@ export function projectPages(deps: { config: Config; services: Services; view: V
         <p class="text-muted t-sm mt-0">Stops the containers and removes the route, files and history. <span class="mono">data/</span> and named volumes are kept unless you tick the box.</p>
         <label class="checkbox"><input type="checkbox" name="deleteData" /> Also delete data/ and named volumes</label>
         ${field({ label: `Type ${p.name} to confirm`, name: 'confirmName', mono: true, required: true, attrs: `autocomplete="off" spellcheck="false" data-confirm-name="${p.name}"` })}
-        <div class="form-actions"><button class="btn btn-danger" type="submit" data-confirm-target>Delete ${p.name}</button><span class="text-muted t-sm">This cannot be undone.</span></div>
+        <div class="form-actions"><button class="btn btn-danger" type="submit" data-confirm-target>${icon('trash', 14)}Delete ${p.name}</button><span class="text-muted t-sm">This cannot be undone.</span></div>
       </form>`, opts.error ? 400 : undefined);
   };
 
