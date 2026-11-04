@@ -4,24 +4,28 @@ from fontTools.pens.svgPathPen import SVGPathPen
 from fontTools.pens.transformPen import TransformPen
 from PIL import Image
 O='/workspace/vibeship-design/brand'; INK='#111111'; CREAM='#f3eee4'; ORG='#e85d04'; DARK='#111111'
-def mark_body(stroke, jib_fill, sail=ORG, sw=5, small=False):
+def mark_body(stroke, jib_fill, sail=ORG, sw=4, small=False, wave2=None):
+    wave2 = wave2 or (sail if sail!='none' else stroke)
+    a=f'fill="none" stroke-linejoin="round" stroke-linecap="round" stroke-width="{sw}"'
     if small:
-        return f'''<g fill="none" stroke="{stroke}" stroke-width="{sw}" stroke-linejoin="round" stroke-linecap="round">
-<path d="M46 8L94 58H46Z" fill="{sail}"/><path d="M8 64H120L104 110H24Z"/><path d="M50 78V96M78 78V96"/></g>'''
-    s=f'stroke="{stroke}" stroke-width="{sw}" stroke-linejoin="round" stroke-linecap="round"'
-    if small:  # 64-unit grid scaled to 128
-        ribs=''.join(f'<path d="M{x} 76V97"/>' for x in (40,60))
-        door='<path d="M84 76H100V96H84Z"/>'
-    else:
-        ribs=''.join(f'<path d="M{x} 74V99"/>' for x in range(30,82,9))
-        door='<path d="M86 74H102V97H86Z M86 81.5H102 M86 89H102"/>'
-    return f'''<g fill="none" {s}>
-<path d="M42 12L72 40V58H42Z" fill="{sail}"/>
-<path d="M72 40L96 58H72Z" fill="{jib_fill}"/>
-<path d="M42 12V58"/>
-<path d="M10 66L22 57H114L118 66Z" fill="{jib_fill}"/>
-<path d="M10 66H118L104 104H24Z"/>
-{ribs}{door}</g>'''
+        return f'''<g {a} stroke="{stroke}">
+<path d="M42 8V58"/><path d="M42 8L92 56H42Z" fill="{jib_fill}"/>
+<path d="M12 62H116V108H12Z" fill="{sail}" stroke="{INK if sail!='none' else stroke}"/>
+<path d="M46 74V96M82 74V96" stroke="{INK if sail!='none' else stroke}"/>
+</g>'''
+    rib=INK if sail!='none' else stroke
+    oribs=''.join(f'M{x} 38V48' for x in range(44,90,8))
+    wribs=''.join(f'M{x} 56V64' for x in range(40,84,8))
+    hribs=''.join(f'M{x} 80V100' for x in range(28,84,7))
+    return f'''<g {a} stroke="{stroke}">
+<path d="M46 2V34"/><path d="M46 2L76 30H46Z" fill="{jib_fill}"/>
+<path d="M32 52H96V68H32Z" fill="{jib_fill}"/><path d="{wribs}M88 54V68"/>
+<path d="M36 34H92V52H36Z" fill="{sail}" stroke="{rib if sail!='none' else stroke}"/><path d="{oribs}" stroke="{rib}"/>
+<path d="M10 74L22 68H110L118 74Z" fill="{jib_fill}"/>
+<path d="M10 74H118L106 106H24Z"/>
+<path d="{hribs}"/><path d="M88 80H102V100H88ZM88 86.5H102M88 93H102"/>
+<path d="M6 116Q16 110 26 115T46 116T64 113"/>
+<path d="M58 121Q70 115 82 120T104 120T122 115" stroke="{wave2}"/></g>'''
 def svg(w,h,inner,vb=None,bg=None):
     b=f'<rect width="100%" height="100%" fill="{bg}"/>' if bg else ''
     return f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="{vb or f"0 0 {w} {h}"}">{b}{inner}</svg>\n'
@@ -36,7 +40,7 @@ def word(fill, size=64, x0=0, base=0):
 W=lambda fill,size,x0,base: word(fill,size,x0,base)
 files={}
 files['vibeship-mark.svg']=svg(128,128,MARK(stroke=INK,jib_fill='#ffffff'))
-files['vibeship-mark-mono.svg']=svg(128,128,MARK(stroke=INK,jib_fill='none',sail=INK))
+files['vibeship-mark-mono.svg']=svg(128,128,MARK(stroke=INK,jib_fill='none',sail='none'))
 files['vibeship-mark-inverse.svg']=svg(128,128,MARK(stroke=CREAM,jib_fill='none'))
 files['favicon.svg']=f'<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="-2 -6 132 132"><rect x="-2" y="-6" width="132" height="132" rx="22" fill="{CREAM}"/>'+mark_body(INK,'#ffffff',sw=10,small=True)+'</svg>\n'
 def horiz(stroke,jib,txt):

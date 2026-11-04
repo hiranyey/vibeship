@@ -1,7 +1,9 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128"><g fill="none" stroke="#f3eee4" stroke-width="5" stroke-linejoin="round" stroke-linecap="round">
-<path d="M42 12L72 40V58H42Z" fill="#e85d04"/>
-<path d="M72 40L96 58H72Z" fill="none"/>
-<path d="M42 12V58"/>
-<path d="M10 66L22 57H114L118 66Z" fill="none"/>
-<path d="M10 66H118L104 104H24Z"/>
-<path d="M30 74V99"/><path d="M39 74V99"/><path d="M48 74V99"/><path d="M57 74V99"/><path d="M66 74V99"/><path d="M75 74V99"/><path d="M86 74H102V97H86Z M86 81.5H102 M86 89H102"/></g></svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128"><g fill="none" stroke-linejoin="round" stroke-linecap="round" stroke-width="4" stroke="#f3eee4">
+<path d="M46 2V34"/><path d="M46 2L76 30H46Z" fill="none"/>
+<path d="M32 52H96V68H32Z" fill="none"/><path d="M40 56V64M48 56V64M56 56V64M64 56V64M72 56V64M80 56V64M88 54V68"/>
+<path d="M36 34H92V52H36Z" fill="#e85d04" stroke="#111111"/><path d="M44 38V48M52 38V48M60 38V48M68 38V48M76 38V48M84 38V48" stroke="#111111"/>
+<path d="M10 74L22 68H110L118 74Z" fill="none"/>
+<path d="M10 74H118L106 106H24Z"/>
+<path d="M28 80V100M35 80V100M42 80V100M49 80V100M56 80V100M63 80V100M70 80V100M77 80V100"/><path d="M88 80H102V100H88ZM88 86.5H102M88 93H102"/>
+<path d="M6 116Q16 110 26 115T46 116T64 113"/>
+<path d="M58 121Q70 115 82 120T104 120T122 115" stroke="#e85d04"/></g></svg>
