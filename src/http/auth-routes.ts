@@ -30,7 +30,7 @@ function page(c: Context<AppEnv>, opts: { title: string; host: string; status?: 
     <html lang="en">
       <head>
         <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
         <title>${opts.title} · Vibeship</title>
         ${raw(ICON_LINKS)}
         <link rel="stylesheet" href="${assetUrl('vibeship.css')}" />

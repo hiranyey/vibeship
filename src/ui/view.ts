@@ -121,7 +121,7 @@ export class View {
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>${opts.title} · Vibeship</title>
     ${raw(ICON_LINKS)}
     <link rel="stylesheet" href="${assetUrl('vibeship.css')}" />
@@ -143,7 +143,7 @@ export class View {
         </nav>
         <div class="topbar-right">
           ${user
-            ? html`<form method="post" action="/auth/logout"><button class="btn btn-ghost btn-sm" type="submit">${icon('logout', 14)}Log out</button></form>`
+            ? html`<form method="post" action="/auth/logout"><button class="btn btn-ghost btn-sm topbar-logout" type="submit" aria-label="Log out">${icon('logout', 14)}<span class="btn-label">Log out</span></button></form>`
             : ''}
         </div>
       </header>

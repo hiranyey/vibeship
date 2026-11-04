@@ -158,6 +158,8 @@
 
 html {
   scroll-padding-top: 72px;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 html, body {
@@ -167,7 +169,7 @@ html, body {
   color: var(--text);
 }
 
-body { min-height: 100vh; }
+body { min-height: 100vh; min-height: 100dvh; }
 
 a { color: var(--accent-text); text-decoration: none; }
 a:hover { text-decoration: underline; }
@@ -257,7 +259,6 @@ h1, h2, h3, .t-xl, .t-2xl, .brand-title, .card-title, .modal-title, .section-tit
 
 .shell-body {
   display: flex;
-  flex-wrap: wrap;
   flex: 1;
   min-height: 0;
 }
@@ -306,8 +307,8 @@ h1, h2, h3, .t-xl, .t-2xl, .brand-title, .card-title, .modal-title, .section-tit
 .sidebar-footer .nav-item.is-copied { color: var(--success-text); }
 
 .main {
-  flex: 1 1 420px;
-  min-width: 280px;
+  flex: 1 1 0;
+  min-width: 0;
   padding: var(--space-4);
   display: flex;
   flex-direction: column;
@@ -957,6 +958,7 @@ h1, h2, h3, .t-xl, .t-2xl, .brand-title, .card-title, .modal-title, .section-tit
 
 /* ——— Code ——— */
 code.inline {
+  overflow-wrap: anywhere;
   font-family: var(--font-mono);
   font-size: 0.92em;
   padding: 1px 5px;
@@ -1448,6 +1450,173 @@ a.tab { text-decoration: none; display: inline-block; }
 .usage { display: inline-flex; flex-direction: column; gap: 3px; min-width: 64px; font-family: var(--font-mono); font-size: var(--text-xs); }
 .usage-bar { display: block; height: 3px; border-radius: var(--radius-full); background: var(--bg-muted); overflow: hidden; }
 .usage-bar i { display: block; height: 100%; background: var(--accent); border-radius: inherit; transition: width 500ms var(--ease-out); }
+
+/* ——— Touch: bigger targets, and 16px inputs so iOS doesn't zoom on focus ——— */
+@media (pointer: coarse) {
+  .btn { min-height: 40px; }
+  .btn-sm { min-height: 36px; }
+  .copy-btn { width: 32px; height: 32px; margin: 0 2px; }
+  .chip { min-height: 32px; padding: 6px 12px; }
+  .page-btn { min-width: 40px; height: 40px; }
+  .checkbox { min-height: 32px; }
+  .checkbox input { width: 20px; height: 20px; }
+  .input, .select, .textarea, .input-mono, .textarea-yaml { font-size: 16px; }
+}
+
+/* ——— Phones ——— */
+@media (max-width: 720px) {
+  :root { --bottom-nav-height: 60px; }
+
+  .app-shell { border-width: 0; min-height: 100dvh; }
+
+  /* Top bar: the mark, the trail (last two steps), an icon-only log out. */
+  .topbar {
+    flex-wrap: nowrap;
+    gap: var(--space-2);
+    min-height: 52px;
+    padding: var(--space-2) max(var(--space-3), env(safe-area-inset-right)) var(--space-2) max(var(--space-3), env(safe-area-inset-left));
+  }
+  .topbar-brand { min-width: 0; flex-shrink: 0; }
+  .topbar .brand-title { display: none; }
+  .topbar .breadcrumb {
+    flex: 1 1 auto;
+    min-width: 0;
+    flex-wrap: nowrap;
+    gap: 6px;
+    white-space: nowrap;
+    overflow: hidden;
+    font-size: var(--text-sm);
+  }
+  .breadcrumb > :nth-last-child(n + 4) { display: none; }
+  .breadcrumb > * { flex-shrink: 0; }
+  .breadcrumb > a:nth-last-child(3) { flex-shrink: 1; min-width: 2ch; overflow: hidden; text-overflow: ellipsis; }
+  .breadcrumb-current { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .topbar-right { flex-shrink: 0; }
+  .topbar-logout { padding: 8px; }
+  .topbar-logout .btn-label { display: none; }
+
+  /* The sidebar becomes a bottom tab bar. */
+  .sidebar {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 30;
+    width: auto;
+    flex-direction: row;
+    justify-content: space-around;
+    gap: 0;
+    min-height: var(--bottom-nav-height);
+    padding: var(--space-2) max(var(--space-2), env(safe-area-inset-right)) calc(var(--space-2) + env(safe-area-inset-bottom)) max(var(--space-2), env(safe-area-inset-left));
+    border-right: none;
+    border-top: var(--border-width) solid var(--border);
+  }
+  .sidebar .nav-item { width: 44px; height: 44px; }
+  .sidebar-footer { margin-top: 0; }
+  .sidebar .tooltip { display: none; }
+
+  .main {
+    gap: var(--space-3);
+    padding: var(--space-3) max(var(--space-3), env(safe-area-inset-right)) var(--space-6) max(var(--space-3), env(safe-area-inset-left));
+  }
+  .shell-body:has(.sidebar) .main {
+    padding-bottom: calc(var(--bottom-nav-height) + var(--space-6) + env(safe-area-inset-bottom));
+  }
+
+  /* Page header: actions share the full width. */
+  .page-header > :first-child { min-width: 0; overflow-wrap: anywhere; }
+  .page-header-actions { width: 100%; }
+  .page-header-actions > .btn,
+  .page-header-actions > .inline-form { flex: 1 1 auto; }
+  .page-header-actions > .inline-form { display: flex; }
+  .page-header-actions > .inline-form .btn { width: 100%; }
+
+  /* Project tabs scroll sideways instead of wrapping. */
+  .tab-list {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    border-bottom: none;
+    box-shadow: inset 0 calc(-1 * var(--border-width)) 0 var(--border);
+  }
+  .tab-list::-webkit-scrollbar { display: none; }
+  .tab { flex-shrink: 0; margin-bottom: 0; white-space: nowrap; }
+
+  .stat { flex: 1 1 calc(50% - var(--space-2)); min-width: 0; }
+  .metrics-head { flex-wrap: wrap; }
+  .metrics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .metric-value { font-size: var(--text-xl); }
+
+  .filter-search { flex-basis: 100%; max-width: none; }
+
+  /* Key/value lists: key above value. */
+  .props { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .props-key:not(:first-child) { margin-top: var(--space-2); }
+
+  /* Tables become a stack of cards, each cell labelled (labels come from ui.js). */
+  .table.is-stackable { min-width: 0; }
+  .table.is-stackable thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .table.is-stackable,
+  .table.is-stackable tbody,
+  .table.is-stackable tr,
+  .table.is-stackable td { display: block; }
+  .table.is-stackable tr { padding: var(--space-3); border-bottom: var(--border-width) solid var(--border); }
+  .table.is-stackable tbody tr:last-child { border-bottom: none; }
+  .table.is-stackable td { padding: 3px 0; border-bottom: none; }
+  .table.is-stackable td[data-label] { position: relative; padding-left: 7.5rem; min-height: 26px; }
+  .table.is-stackable td[data-label]::before {
+    content: attr(data-label);
+    position: absolute;
+    left: 0;
+    top: 6px;
+    width: 7rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+  /* The first cell names the row, so it reads as the card's title. */
+  .table.is-stackable td:first-child[data-label] {
+    padding-left: 0;
+    padding-bottom: var(--space-2);
+    font-weight: var(--weight-semibold);
+    font-size: var(--text-base);
+  }
+  .table.is-stackable td:first-child[data-label]::before { content: none; }
+  .table.is-stackable .cell-actions { text-align: left; padding-top: var(--space-2); }
+  .table.is-stackable td:empty { display: none; }
+  .table.is-stackable .cell-actions .btn-ghost { margin-left: -10px; }
+  .table.is-stackable .cell-wrap { max-width: none; }
+  .table.is-stackable tbody tr:hover td { background: transparent; }
+  .table.is-stackable tr.is-highlight { background: var(--accent-subtle); }
+  .table.is-stackable tr.is-highlight td { background: transparent; }
+
+  /* Logs: no line numbers, wrapped lines. */
+  .log-viewer-header { flex-wrap: wrap; }
+  .log-viewer-header strong { min-width: 0; overflow-wrap: anywhere; }
+  .log-num { display: none; }
+  .log-line { grid-template-columns: max-content minmax(0, 1fr); }
+  .log-line.no-ts { grid-template-columns: minmax(0, 1fr); }
+  .log-line > :last-child { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .log-body.log-tall { max-height: 65vh; }
+
+  .diff-header { flex-wrap: wrap; }
+
+  .toast-stack { left: var(--space-3); right: var(--space-3); bottom: calc(var(--bottom-nav-height) + var(--space-3) + env(safe-area-inset-bottom)); max-width: none; }
+
+  .auth-card { padding: var(--space-5); }
+}
 
 /* ——— Motion: short, quiet, and off for anyone who asks for less ——— */
 :root {

@@ -4,6 +4,26 @@
 (() => {
   'use strict';
 
+  // On phones, tables turn into stacked cards (see `.table.is-stackable` in
+  // vibeship.css). Each cell is labelled with its column heading here; cells
+  // only ever get new contents later, so the labels stay put.
+  for (const table of document.querySelectorAll('table.table')) {
+    const heads = [...table.querySelectorAll('thead th')].map((th) => th.textContent.trim());
+    for (const row of table.tBodies[0]?.rows ?? []) {
+      [...row.cells].forEach((td, i) => {
+        if (heads[i] && td.colSpan === 1) td.dataset.label = heads[i];
+      });
+    }
+    table.classList.add('is-stackable');
+  }
+
+  // Project tabs scroll sideways on phones; keep the current one in view.
+  const tabList = document.querySelector('.tab-list');
+  const currentTab = tabList?.querySelector('[aria-current="page"]');
+  if (tabList && currentTab && tabList.scrollWidth > tabList.clientWidth) {
+    tabList.scrollLeft = currentTab.offsetLeft - tabList.offsetLeft - (tabList.clientWidth - currentTab.offsetWidth) / 2;
+  }
+
   /** Appends one log line to a `.log-body`, keeping it scrolled to the end if it was. */
   function appendLine(body, { seq, stream, line, ts }) {
     // Container logs come with Docker's timestamp in front of the line.
