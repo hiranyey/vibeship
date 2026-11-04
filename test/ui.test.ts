@@ -76,7 +76,9 @@ test('the dashboard and every page render with security headers', async (t) => {
   }
   const home = await (await b.get('/')).text();
   assert.match(home, /No projects yet/);
-  assert.match(home, /admin@example\.com/);
+  // The topbar shows only the log out button, not the user's name, email or an admin badge.
+  assert.match(home, /<form method="post" action="\/auth\/logout">/);
+  assert.doesNotMatch(home, /admin@example\.com|class="user-chip"|class="brand-sub"/);
 });
 
 test('static assets are served', async (t) => {

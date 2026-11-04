@@ -138,7 +138,10 @@ test('login with the provider starts a session that works as admin, and logout e
   assert.equal(location, '/api/me');
   const me = await (await h.call('GET', '/api/me', { cookie })).json() as { kind: string; scope: string; user: { email: string } };
   assert.deepEqual([me.kind, me.scope, me.user.email], ['user', 'admin', 'admin@example.com']);
-  assert.match(await (await h.call('GET', '/', { cookie })).text(), /admin@example\.com/);
+  // The session opens the dashboard, whose topbar has only the log out button.
+  const home = await h.call('GET', '/', { cookie });
+  assert.equal(home.status, 200);
+  assert.match(await home.text(), /action="\/auth\/logout"/);
 
   const out = await h.call('POST', '/auth/logout', { cookie, headers: { origin: ORIGIN } });
   assert.equal(out.status, 303);
