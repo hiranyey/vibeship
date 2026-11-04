@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import type { TestContext } from 'node:test';
 import type { RequestContext } from '../src/actor.ts';
 import { Db } from '../src/db/db.ts';
+import type { Lchown } from '../src/deploy/files.ts';
 import { migrate } from '../src/db/migrate.ts';
 import { createServices } from '../src/services/index.ts';
 import { FakeCaddy, FakeDocker } from './fakes.ts';
@@ -19,7 +20,7 @@ export const FAST_TIMING = { timeoutMs: 300, pollMs: 5, stableMs: 20 };
  * fake Docker and Caddy and a temporary STACK_ROOT (removed after the test
  * when `t` is given).
  */
-export function setup(t?: TestContext) {
+export function setup(t?: TestContext, opts: { lchown?: Lchown } = {}) {
   const db = new Db(':memory:');
   migrate(db);
   const userId = db.run(`INSERT INTO users (oidc_sub, email) VALUES ('user_1', 'me@example.com')`).lastInsertRowid;
@@ -35,6 +36,7 @@ export function setup(t?: TestContext) {
     caddy,
     probe: docker.probe,
     timing: FAST_TIMING,
+    lchown: opts.lchown,
   });
   return { ...services, db, ctx, userId, stackRoot, fakeDocker: docker, fakeCaddy: caddy };
 }

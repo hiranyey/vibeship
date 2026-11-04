@@ -13,12 +13,13 @@ import {
   PORT_KEYS, SERVICE_KEYS, SERVICE_NETWORK_KEYS, TOP_KEYS, TOP_NETWORK_KEYS, TOP_VOLUME_KEYS, VOLUME_KEYS,
   checkCompose, composeRoutedContainer,
 } from '../compose/validate.ts';
+import { dataOwnerFailure, dataOwnerLogLine } from '../deploy/engine.ts';
 import { HEALTH_POLL_MS, HEALTH_STABLE_MS, PROBE_TIMEOUT_MS, healthUrl } from '../deploy/health.ts';
 import { COMPOSE_FILE, DATA_DIR, ENV_FILE, ENV_FILE_MODE, IMAGE_DATA_MOUNT, WEB_NETWORK } from '../deploy/layout.ts';
 import { ROUTE_SYNC_INTERVAL_MS } from '../deploy/routes.ts';
 import { parseImageRef, pinned } from '../docker/image-ref.ts';
 import { WEBHOOK_BODY_LIMIT_BYTES } from '../http/hooks.ts';
-import { DIGEST_PATTERN, ENV_KEY_PATTERN, ENV_VALUE_MAX_BYTES, RESERVED_ENV_PREFIXES, RESERVED_NAMES } from '../schemas.ts';
+import { COMPOSE_DATA_OWNER_MESSAGE, DIGEST_PATTERN, ENV_KEY_PATTERN, ENV_VALUE_MAX_BYTES, RESERVED_ENV_PREFIXES, RESERVED_NAMES } from '../schemas.ts';
 import type { Services } from '../services/index.ts';
 import type { Project, ProjectKind } from '../services/projects.ts';
 import { HEALTH_TIMEOUT_SECONDS } from '../services/settings.ts';
@@ -72,6 +73,7 @@ export type ProjectSnapshot = {
     tag: string;
     currentDigest: string | null;
     memLimit: string | null;
+    dataOwner: string | null;
     registry: { id: number; name: string; host: string; hasLogin: boolean } | null;
     registryIdSet: boolean;
   } | null;
@@ -133,6 +135,7 @@ export function snapshotProject(s: Services, p: Project): ProjectSnapshot {
           tag: parseImageRef(p.image.imageRef).tag,
           currentDigest: p.image.currentDigest,
           memLimit: p.image.memLimit,
+          dataOwner: p.image.dataOwner,
           registry: registry ? { id: registry.id, name: registry.name, host: registry.host, hasLogin: Boolean(registry.username && registry.hasToken) } : null,
           registryIdSet: p.image.registryId !== null,
         }
@@ -226,7 +229,20 @@ function dataSection(k: Kind, name: string, ctx: GuideContext, project?: Project
     );
   }
   lines.push(
-    `- **Ownership.** Vibeship runs as root and creates ${c(DATA_DIR + '/')} without changing its owner or mode, so the folder belongs to root (with the usual umask, only root can write to it). A process running as a non-root user cannot write to it until it is chowned.${k !== 'image' ? ' A compose service can set `user:`; a named volume is the alternative for a non-root service.' : ''}${k !== 'compose' ? ' Image projects have no `user` setting.' : ''} Vibeship has no UID or ownership setting.`,
+    `- **Ownership.** Vibeship runs as root and creates ${c(DATA_DIR + '/')} without changing its mode, so by default the folder belongs to root (with the usual umask, only root can write to it). A process running as a non-root user cannot write to it until it is chowned.`,
+  );
+  if (k !== 'compose') {
+    lines.push(
+      `- **\`dataOwner\` (image projects).** If the image runs as a non-root user (a \`USER\` line; \`USER node\` in the official Node images is uid 1000), set ${c('dataOwner: "<uid>:<gid>"')} on \`create_project\` or \`update_project\`, e.g. ${c('dataOwner: "1000:1000"')}. Each deploy then gives ${c(DATA_DIR + '/')} to that owner before starting the container, and logs ${c(dataOwnerLogLine('<uid>:<gid>'))}. If the folder had a different owner (the first deploy after setting or changing it), everything inside is chowned too, so files an earlier version wrote as root become writable; otherwise only the folder itself is, so deploys stay cheap. Symlinks are never followed and nothing outside ${c(DATA_DIR + '/')} is touched. Changing \`dataOwner\` is a pending change (\`drift.pendingChanges: true\`) and applies on the next deploy, like env. It does not set \`user:\` on the container: the image's own \`USER\` still decides who runs. \`null\` (the default) leaves the owner alone: a new folder stays owned by root, and clearing \`dataOwner\` does not give it back to root (chown it by hand if needed).`,
+      `- If the chown fails, the deploy fails before anything is started, with ${c(dataOwnerFailure('<uid>:<gid>') + ': <reason>')}, and the running version keeps serving.`,
+      `- **A \`chown\` in the Dockerfile has no effect on ${c(IMAGE_DATA_MOUNT)}:** the bind mount hides whatever the image had at that path.`,
+      `- **If you can't use \`dataOwner\`** (for example the app picks its uid at runtime), leave \`USER\` out of the Dockerfile so the container starts as root, and use an entrypoint that chowns ${c(IMAGE_DATA_MOUNT)} and then drops privileges before starting the app, e.g. ${c(`chown -R 1000:1000 ${IMAGE_DATA_MOUNT} && exec setpriv --reuid=1000 --regid=1000 --init-groups node server.js`)} (or \`exec gosu node node server.js\`).`,
+    );
+  }
+  if (k !== 'image') {
+    lines.push(`- **Compose projects** have no \`dataOwner\` (it is refused with ${c(`validation: dataOwner: ${COMPOSE_DATA_OWNER_MESSAGE}`)}). A compose service can set \`user:\`; a named volume is the alternative for a non-root service.`);
+  }
+  lines.push(
     '- **What survives:**',
     `  - *A redeploy:* ${c(DATA_DIR + '/')} and named volumes survive. A deploy runs \`docker compose up -d\`, which recreates a container whose image or config changed, and everything outside the mounts is lost when that happens. A failed deploy's fallback does not roll data back: the previous version sees whatever the failed one wrote.`,
     '  - *`restart`, `stop` and `start`:* the same containers are restarted, so everything survives, including the container filesystem.',
@@ -470,7 +486,7 @@ function troubleshootingSection(k: Kind, name: string, ctx: GuideContext): strin
   items.push(
     `- **Health check timeout.** \`health check timed out after ${ctx.healthTimeoutSeconds}s: <last problem>\`. With \`… answered HTTP <status>\`, the path exists but doesn't return 2xx or 3xx. With \`… answered ECONNREFUSED\` (or another network error), nothing is listening on that port. Tools: \`get_deploy_logs\`, then \`get_container_logs\` for the app's own output.`,
     `- **Port mismatch.** With a \`healthPath\`, it shows up as the timeout above with \`http://${name}:<port>… answered ECONNREFUSED\`. Without one, the deploy passes (the container stays up) but requests to the hostname fail, because Caddy can't connect to \`${name}:<port>\`. Fix the port with \`update_project\` (image) or \`update_compose\` (compose), or make the app listen on the configured port on \`0.0.0.0\`, then deploy. Tools: \`get_project\` (\`project.upstream\`), \`get_container_logs\`.`,
-    `- **Permission denied on ${k === 'compose' ? 'the data mount' : IMAGE_DATA_MOUNT}.** The app crashes, so the deploy fails with \`container crashed and is restarting (last exit code <n>)\` or \`container exited with code <n>\`. The "permission denied" text appears only in the app's own logs, because ${c(DATA_DIR + '/')} is owned by root (see Persistent data). Tools: \`get_container_logs\`, \`get_status\`.`,
+    `- **Permission denied on ${k === 'compose' ? 'the data mount' : IMAGE_DATA_MOUNT}.** The app crashes, so the deploy fails with \`container crashed and is restarting (last exit code <n>)\` or \`container exited with code <n>\`. The "permission denied" text appears only in the app's own logs, because ${c(DATA_DIR + '/')} is owned by root (see Persistent data). ${k === 'compose' ? 'Set `user:` on the service to match the folder, or use a named volume.' : `First fix: ${c(`update_project { dataOwner: "1000:1000" }`)} (the uid:gid the image's \`USER\` runs as), then \`deploy\`; the log shows ${c(dataOwnerLogLine('1000:1000'))}.${k === 'both' ? ' For compose, set `user:` on the service or use a named volume.' : ''}`} Tools: \`get_container_logs\`, \`get_status\`.`,
     '- **Crash on start.** `container exited with code <n>`, or `container crashed and is restarting (last exit code <n>)`. Tool: `get_container_logs` (for compose projects, pass `service` to read a service other than the routed one).',
     '- **`<project> has a deploy in progress; try again when it finishes`** from `restart`, `stop`, `start` or `delete_project`: wait for `get_deploy_logs` to show the deploy as `finished`. **`<project> has not been deployed yet`** from `restart`, `stop` or `start`: deploy first.',
     `- **\`hostname must be a single label under ${ctx.baseDomain}, like app.${ctx.baseDomain}\`**: use one label, e.g. \`${name}.${ctx.baseDomain}\`.`,
@@ -494,7 +510,7 @@ function projectSection(p: ProjectSnapshot, ctx: GuideContext): string {
       `- Live digest: ${p.image.currentDigest ? c(p.image.currentDigest) : 'none yet (never deployed healthy)'}`,
       `- Registry: ${reg ? `${c(reg.name)} (id ${reg.id}, host ${c(reg.host)}, ${p.image.registryIdSet ? 'set by registryId' : 'matched by host'}), ${reg.hasLogin ? 'pulls with its login' : 'no login, so pulls are anonymous'}` : 'none matches, so pulls are anonymous'}`,
       `- Memory limit: ${p.image.memLimit ? c(p.image.memLimit) : 'none'}`,
-      `- Data: ${c(p.dataHostPath)} mounted at ${c(IMAGE_DATA_MOUNT)}`,
+      `- Data: ${c(p.dataHostPath)} mounted at ${c(IMAGE_DATA_MOUNT)}; data owner: ${p.image.dataOwner ? `${c(p.image.dataOwner)} (applied on each deploy)` : 'not set, so owned by root (set `dataOwner` if the image runs as a non-root user)'}`,
       `- Webhook: ${p.hasWebhook ? 'exists (the URL is not shown; `rotate_webhook` replaces it with a new one)' : 'none yet; create it with `rotate_webhook` (admin) and store the URL as the WEBHOOK_URL repository secret'}`,
     );
   }
@@ -523,6 +539,7 @@ Projects are "image" (one container from a registry image, deployed pinned by di
 Image project contract:
 - One image per project at ${IMAGE_REPOSITORY_BASE}/<project>, pushed as :latest and :<git sha>; create the project with imageRef <that repository>:latest.
 - The app listens on containerPort on 0.0.0.0. Vibeship injects no env vars (no PORT). Only ${IMAGE_DATA_MOUNT} persists.
+- If the image runs as a non-root user, set dataOwner (e.g. "1000:1000") so it can write ${IMAGE_DATA_MOUNT}.
 - CI POSTs {"digest":"sha256:<64 hex>","image":"<repository>"} as JSON to the project's webhook URL. A request with no JSON body or a malformed digest is rejected (400). "image", if sent, must be the project's repository. The deploy pulls <repository>@<digest>, so a digest from any other repository fails at the pull and the running version keeps serving.
 
 Setup order:
@@ -541,8 +558,8 @@ export function shipNewAppPrompt(project: string, kind: ProjectKind, baseDomain:
   const steps = kind === 'image'
     ? [
         `Call get_deploy_guide with { "kind": "image" } and read it, especially "Persistent data", "Env vars and secrets" and "Webhook and CI".`,
-        `Check that the app listens on 0.0.0.0 on a fixed port, writes its state only under ${IMAGE_DATA_MOUNT}, and can write there (${IMAGE_DATA_MOUNT} is owned by root). If possible, give it an HTTP health endpoint that answers 2xx.`,
-        `Call create_project with { "kind": "image", "name": "${project}", "imageRef": "${repo}:latest", "containerPort": <port>, "healthPath": "<path>" }. The hostname defaults to ${project}.${baseDomain}. Use list_registries to check that a registry with a login matches the image host.`,
+        `Check that the app listens on 0.0.0.0 on a fixed port, writes its state only under ${IMAGE_DATA_MOUNT}, and can write there (${IMAGE_DATA_MOUNT} is owned by root unless dataOwner is set). If the Dockerfile has a non-root USER (e.g. USER node, uid 1000), note its uid:gid for dataOwner. If possible, give it an HTTP health endpoint that answers 2xx.`,
+        `Call create_project with { "kind": "image", "name": "${project}", "imageRef": "${repo}:latest", "containerPort": <port>, "healthPath": "<path>" }, adding "dataOwner": "<uid>:<gid>" (e.g. "1000:1000") when the image runs as a non-root user. The hostname defaults to ${project}.${baseDomain}. Use list_registries to check that a registry with a login matches the image host.`,
         `Set any configuration with set_env, marking secrets with "secret": true. If the app reads PORT, set it to the same port: Vibeship injects nothing.`,
         `Call rotate_webhook for "${project}" (needs an admin token). The URL is returned only once. Store it straight away as the ${CI_SECRETS.webhook} GitHub repository secret, for example with \`gh secret set ${CI_SECRETS.webhook}\` reading it from stdin, and never print it, log it, commit it or repeat it back.`,
         `Make sure the repository has the ${CI_SECRETS.username} and ${CI_SECRETS.password} secrets for a registry login that can push to ${repo}.`,

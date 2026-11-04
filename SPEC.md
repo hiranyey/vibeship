@@ -69,7 +69,7 @@ Two external Docker networks exist:
 | `web` | Caddy, Vibeship, the routed container of every project | Caddy proxies to apps |
 | `caddy-admin` | Caddy and Vibeship only (`internal: true`) | Caddy admin API |
 
-Each project's routed container joins `web` with the network alias `<project>`, so Caddy always reaches it as `<project>:<port>` whatever the service is called inside the compose file. Only the routed service joins `web`; a project's other services (databases, workers) stay on that project's default compose network, so two projects can both have a service called `db` or `app` without clashing. Project names are unique slugs, and `caddy`, `caddy-api`, `caddy-admin`, `vibeship`, `web` and `localhost` are reserved so no alias can shadow them. Compose also adds the service name as an alias on every network a service joins, so a compose project's routed service may not use a reserved name either; otherwise a service called `vibeship` could take some of Caddy's traffic for the Vibeship UI. No container publishes a port on `0.0.0.0`: only Caddy listens publicly on 443, and any other published port is bound to `127.0.0.1`. Generated files are a cache of the database: Vibeship rewrites them on every deploy, and a hand edit is flagged as drift in the UI. Drift compares each file with the hash recorded when it was written, so it is told apart from database changes (such as a new env var) not yet deployed. An image project's container mounts its `data/` folder at `/data`.
+Each project's routed container joins `web` with the network alias `<project>`, so Caddy always reaches it as `<project>:<port>` whatever the service is called inside the compose file. Only the routed service joins `web`; a project's other services (databases, workers) stay on that project's default compose network, so two projects can both have a service called `db` or `app` without clashing. Project names are unique slugs, and `caddy`, `caddy-api`, `caddy-admin`, `vibeship`, `web` and `localhost` are reserved so no alias can shadow them. Compose also adds the service name as an alias on every network a service joins, so a compose project's routed service may not use a reserved name either; otherwise a service called `vibeship` could take some of Caddy's traffic for the Vibeship UI. No container publishes a port on `0.0.0.0`: only Caddy listens publicly on 443, and any other published port is bound to `127.0.0.1`. Generated files are a cache of the database: Vibeship rewrites them on every deploy, and a hand edit is flagged as drift in the UI. Drift compares each file with the hash recorded when it was written, so it is told apart from database changes (such as a new env var) not yet deployed. An image project's container mounts its `data/` folder at `/data`. `data/` is created by Vibeship (as root) and owned by root, unless the image project sets `dataOwner` (`"<uid>:<gid>"`, e.g. `"1000:1000"` for images with `USER node`): then each deploy, before starting the container, gives `data/` to that owner, recursing into its contents only when the folder's own owner differs (so the first deploy after a change fixes existing files and later deploys cost one `lchown`). Symlinks are never followed. If the chown fails, the deploy fails before anything is started. `dataOwner` never sets `user:` on the container, and is recorded as the `dev.vibeship.data-owner` label in the generated file, so a change shows as pending until deployed. Clearing it leaves the folder's current owner alone. Compose projects don't have it; their services set `user:` themselves.
 
 ## Project types
 
@@ -124,15 +124,15 @@ Caddy runs as its own container with its admin API listening on port 2019 only o
 | Tool | Scope | What it does |
 |---|---|---|
 | `list_projects` | read | All projects with kind, hostname and status |
-| `get_project` | read | Config, route, env keys (no secret values), current version |
+| `get_project` | read | Config (including `image.dataOwner`), route, env keys (no secret values), current version |
 | `get_status` | read | Live container state from Docker |
 | `list_deploys` | read | Recent deploys for a project |
 | `get_deploy_logs` | read | Log lines for one deploy |
 | `get_container_logs` | read | Tail of a container's logs |
 | `list_registries` | read | Registry logins (no tokens), for picking `registryId` |
 | `get_deploy_guide` | read | How to ship an app, as markdown: image and registry, data, env, networking, health checks, the compose allowlist, a CI workflow, troubleshooting; with `project`, filled in with that project's values (never secrets or webhook URLs) |
-| `create_project` | deploy | New image or compose project with hostname |
-| `update_project` | deploy | Change the hostname, or an image project's image, port or health path |
+| `create_project` | deploy | New image or compose project with hostname; image projects can set `dataOwner` |
+| `update_project` | deploy | Change the hostname, or an image project's image, port, health path, registry, memory limit or `dataOwner` (`null` clears it) |
 | `update_compose` | deploy | Save a new compose version |
 | `set_env` | deploy | Set or unset env vars and secrets |
 | `deploy` | deploy | Deploy latest, a digest or a compose version; returns a deploy id |
@@ -171,7 +171,7 @@ Request bodies are validated with Zod schemas shared by the API and the MCP tool
 | `sessions` | id (hash), user_id, expires_at, ip, user_agent |
 | `api_tokens` | id, name, token_hash, scope, project_ids, created_by, last_used_at, expires_at, revoked_at |
 | `projects` | id, name (slug), kind, hostname, status, webhook_token_hash, created_by, timestamps |
-| `image_sources` | project_id, registry_id, image_ref, container_port, health_path, mem_limit, current_digest |
+| `image_sources` | project_id, registry_id, image_ref, container_port, health_path, mem_limit, data_owner, current_digest |
 | `compose_versions` | id, project_id, version, compose_yaml, routed_service, port, note, created_by |
 | `routes` | id, project_id, hostname, upstream, options (JSON) |
 | `env_vars` | project_id, key, value_encrypted, is_secret, updated_by, updated_at |

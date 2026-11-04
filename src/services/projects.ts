@@ -3,7 +3,7 @@ import { randomToken, sha256Hex } from '../crypto/tokens.ts';
 import type { Db } from '../db/db.ts';
 import { AppError, notFound } from '../errors.ts';
 import { checkCompose, renderComposeProject } from '../compose/validate.ts';
-import { ComposeVersionFields, CreateProjectInput, RESERVED_NAMES, UpdateProjectInput } from '../schemas.ts';
+import { COMPOSE_DATA_OWNER_MESSAGE, ComposeVersionFields, CreateProjectInput, RESERVED_NAMES, UpdateProjectInput } from '../schemas.ts';
 import type { AuditLog } from './audit.ts';
 import { parseInput } from './validate.ts';
 
@@ -16,6 +16,8 @@ export type ImageSource = {
   containerPort: number;
   healthPath: string | null;
   memLimit: string | null;
+  /** "<uid>:<gid>" that owns `data/`, applied on each deploy; null leaves it owned by root. */
+  dataOwner: string | null;
   currentDigest: string | null;
 };
 
@@ -70,6 +72,7 @@ type ImageSourceRow = {
   container_port: number;
   health_path: string | null;
   mem_limit: string | null;
+  data_owner: string | null;
   current_digest: string | null;
 };
 
@@ -133,9 +136,9 @@ export class ProjectService {
       if (input.kind === 'image') {
         if (input.registryId != null) this.#checkRegistry(input.registryId);
         this.#db.run(
-          `INSERT INTO image_sources (project_id, registry_id, image_ref, container_port, health_path, mem_limit)
-           VALUES (?, ?, ?, ?, ?, ?)`,
-          id, input.registryId ?? null, input.imageRef, input.containerPort, input.healthPath ?? null, input.memLimit ?? null,
+          `INSERT INTO image_sources (project_id, registry_id, image_ref, container_port, health_path, mem_limit, data_owner)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          id, input.registryId ?? null, input.imageRef, input.containerPort, input.healthPath ?? null, input.memLimit ?? null, input.dataOwner ?? null,
         );
         port = input.containerPort;
       } else {
@@ -147,7 +150,9 @@ export class ProjectService {
         'INSERT INTO routes (project_id, hostname, upstream) VALUES (?, ?, ?)',
         id, hostname, upstream(input.name, port),
       );
-      this.#audit.record(ctx, 'project.create', `project:${id}`, { name: input.name, kind: input.kind, hostname });
+      this.#audit.record(ctx, 'project.create', `project:${id}`, {
+        name: input.name, kind: input.kind, hostname, ...(input.kind === 'image' && input.dataOwner ? { dataOwner: input.dataOwner } : {}),
+      });
       return this.get(id);
     });
   }
@@ -158,6 +163,9 @@ export class ProjectService {
     return this.#db.transaction(() => {
       const project = this.get(id);
       const { hostname: newHostname, ...imageFields } = input;
+      if (project.kind === 'compose' && imageFields.dataOwner !== undefined) {
+        throw new AppError('validation', `dataOwner: ${COMPOSE_DATA_OWNER_MESSAGE}`);
+      }
       if (project.kind === 'compose' && Object.keys(imageFields).length > 0) {
         throw new AppError('validation', `Only the hostname of a compose project can be changed here; save a new compose version for the rest`);
       }
@@ -178,6 +186,7 @@ export class ProjectService {
           registry_id: imageFields.registryId,
           health_path: imageFields.healthPath,
           mem_limit: imageFields.memLimit,
+          data_owner: imageFields.dataOwner,
         };
         for (const [column, value] of Object.entries(columns)) {
           if (value === undefined) continue;
@@ -344,6 +353,7 @@ export class ProjectService {
             containerPort: image.container_port,
             healthPath: image.health_path,
             memLimit: image.mem_limit,
+            dataOwner: image.data_owner,
             currentDigest: image.current_digest,
           }
         : null,

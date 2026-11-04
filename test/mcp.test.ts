@@ -233,6 +233,7 @@ test('initialize returns the short contract, pointing to get_deploy_guide', asyn
   for (const part of [
     'api.repoflow.io/hiranyeyg-6713/vibes/<project>', ':latest and :<git sha>', '{"digest":"sha256:<64 hex>"',
     'create_project', 'rotate_webhook', 'WEBHOOK_URL', 'list_deploys', 'get_status', 'get_deploy_guide', '<project>.localhost',
+    'If the image runs as a non-root user, set dataOwner (e.g. "1000:1000") so it can write /data.',
   ]) assert.ok(instructions.includes(part), `instructions mention ${part}`);
   assert.ok(instructions.indexOf('create_project') < instructions.indexOf('rotate_webhook'));
   assert.ok(instructions.indexOf('rotate_webhook') < instructions.indexOf('list_deploys'));
@@ -305,7 +306,7 @@ test('the guide, resource and prompt never contain secrets, webhook URLs or toke
   h.registries.create(h.ctx, { name: 'Local', url: 'localhost:5050', username: 'puller', token: REGISTRY_TOKEN });
   const { client, call } = await h.agent('admin');
   const { token: apiToken } = h.tokens.create(h.ctx, { name: 'other', scope: 'deploy' });
-  await call('create_project', { kind: 'image', name: 'hello', imageRef: REF, containerPort: 8080 });
+  await call('create_project', { kind: 'image', name: 'hello', imageRef: REF, containerPort: 8080, dataOwner: `${process.getuid!()}:${process.getgid!()}` });
   await call('set_env', { project: 'hello', set: { API_KEY: { value: SECRET, secret: true }, PLAIN: { value: 'visible-plain-value' } } });
   const { url } = await call<{ url: string }>('rotate_webhook', { project: 'hello' });
   await call('deploy', { project: 'hello' });
@@ -326,8 +327,26 @@ test('the guide, resource and prompt never contain secrets, webhook URLs or toke
     }
     assert.doesNotMatch(out, /\/hooks\/deploy\/[A-Za-z0-9_-]{10,}/);
   }
+  assert.ok(outputs[3]!.includes(`data owner: \`${process.getuid!()}:${process.getgid!()}\` (applied on each deploy)`));
   // The registry is reported by name and login state only.
   assert.match(outputs[3]!, /`Local` \(id \d+, host `localhost:5050`, matched by host\), pulls with its login/);
+});
+
+test('dataOwner through MCP: set on create, shown by get_project and the guide, changed and cleared by update_project', async (t) => {
+  const h = harness(t);
+  const { call } = await h.agent('deploy');
+  type Got = { project: { image: { dataOwner: string | null } }; drift: { pendingChanges: boolean } };
+
+  const created = await call<{ image: { dataOwner: string | null } }>('create_project', { kind: 'image', name: 'hello', imageRef: REF, containerPort: 8080, dataOwner: '1000:1000' });
+  assert.equal(created.image.dataOwner, '1000:1000');
+  assert.equal((await call<Got>('get_project', { project: 'hello' })).project.image.dataOwner, '1000:1000');
+
+  assert.equal((await call('update_project', { project: 'hello', dataOwner: '70000:1' })).error, 'validation: dataOwner: must be "<uid>:<gid>" like "1000:1000"');
+  assert.equal((await call('update_project', { project: 'hello', dataOwner: '1000' })).error, 'validation: dataOwner: must be "<uid>:<gid>" like "1000:1000"');
+  assert.equal((await call<{ image: { dataOwner: string | null } }>('update_project', { project: 'hello', dataOwner: null })).image.dataOwner, null);
+
+  const compose = await call('create_project', { kind: 'compose', name: 'blog', composeYaml: 'services:\n  app:\n    image: nginx:1.29\n', routedService: 'app', port: 80, dataOwner: '1000:1000' });
+  assert.match(compose.error ?? '', /^validation: dataOwner: only image projects have a data owner/);
 });
 
 test('every scope gets the guide resource and the ship_new_app prompt', async (t) => {

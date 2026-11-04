@@ -15,5 +15,8 @@ export const ENV_FILE_MODE = 0o600;
 /** The project's persistent folder, `<STACK_ROOT>/<project>/data`. */
 export const DATA_DIR = 'data';
 
+/** The label in an image project's generated file recording its `dataOwner`. */
+export const DATA_OWNER_LABEL = 'dev.vibeship.data-owner';
+
 /** Where an image project's container sees `data/`. */
 export const IMAGE_DATA_MOUNT = '/data';

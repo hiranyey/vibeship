@@ -22,6 +22,7 @@ test('creates an image project with a default hostname and route', () => {
     containerPort: 8080,
     healthPath: '/health',
     memLimit: null,
+    dataOwner: null,
     currentDigest: null,
   });
   assert.equal(p.compose, null);
@@ -72,6 +73,41 @@ test('rejects unknown registries and bad image fields', () => {
   assert.throws(() => projects.create(ctx, imageProject({ imageRef: 'app@sha256:abc' })), isCode('validation'));
   assert.throws(() => projects.create(ctx, imageProject({ healthPath: 'health' })), isCode('validation'));
   assert.throws(() => projects.create(ctx, { kind: 'vm', name: 'x' }), isCode('validation'));
+});
+
+const DATA_OWNER_ERROR = /^dataOwner: must be "<uid>:<gid>" like "1000:1000"$/;
+
+test('dataOwner accepts "<uid>:<gid>" in 0-65535 and refuses anything else', () => {
+  const { projects, ctx } = setup();
+  for (const [i, owner] of ['1000:1000', '0:0', '65535:65535'].entries()) {
+    assert.equal(projects.create(ctx, imageProject({ name: `ok${i}`, dataOwner: owner })).image?.dataOwner, owner);
+  }
+  assert.equal(projects.create(ctx, imageProject({ name: 'unset', dataOwner: null })).image?.dataOwner, null);
+  for (const owner of ['1000', 'abc:1', '70000:1', '1:70000', '-1:1000', '1000:-1', '1000:1000:1', ' 1000:1000', '', '123456:1', 1000]) {
+    assert.throws(() => projects.create(ctx, imageProject({ name: 'bad', dataOwner: owner })), isCode('validation', DATA_OWNER_ERROR), `refuses ${JSON.stringify(owner)}`);
+  }
+});
+
+test('dataOwner can be set, changed and cleared with update, and each change is audited', () => {
+  const { projects, ctx, audit } = setup();
+  const { id } = projects.create(ctx, imageProject({ dataOwner: '1000:1000' }));
+  assert.deepEqual(audit.list({ limit: 1 })[0]?.details, { name: 'hello', kind: 'image', hostname: 'hello.localhost', dataOwner: '1000:1000' });
+
+  assert.equal(projects.update(ctx, id, { dataOwner: '1001:1001' }).image?.dataOwner, '1001:1001');
+  assert.deepEqual(audit.list({ limit: 1 })[0]?.details, { name: 'hello', changes: { data_owner: '1001:1001' } });
+  assert.equal(projects.update(ctx, id, { memLimit: '1g' }).image?.dataOwner, '1001:1001', 'left alone when not sent');
+  assert.equal(projects.update(ctx, id, { dataOwner: null }).image?.dataOwner, null);
+  assert.deepEqual(audit.list({ limit: 1 })[0]?.details, { name: 'hello', changes: { data_owner: null } });
+  assert.throws(() => projects.update(ctx, id, { dataOwner: '1000' }), isCode('validation', DATA_OWNER_ERROR));
+});
+
+test('compose projects refuse dataOwner with a clear error', () => {
+  const { projects, ctx } = setup();
+  const compose = /^dataOwner: only image projects have a data owner/;
+  assert.throws(() => projects.create(ctx, composeProject({ dataOwner: '1000:1000' })), isCode('validation', compose));
+  const b = projects.create(ctx, composeProject({ dataOwner: null }));
+  assert.throws(() => projects.update(ctx, b.id, { dataOwner: '1000:1000' }), isCode('validation', compose));
+  assert.throws(() => projects.update(ctx, b.id, { dataOwner: null }), isCode('validation', compose));
 });
 
 test('update changes image fields and keeps the route in step', () => {

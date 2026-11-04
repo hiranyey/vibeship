@@ -34,13 +34,31 @@ export const Digest = z.string().regex(DIGEST_PATTERN, 'must be sha256:<64 hex c
 const HealthPath = z.string().max(255).regex(/^\/\S*$/, 'must start with /');
 const MemLimit = z.string().regex(/^\d+[kmg]?$/i, 'must look like 512m or 1g');
 
+export const DATA_OWNER_PATTERN = /^\d{1,5}:\d{1,5}$/;
+const DATA_OWNER_MESSAGE = 'must be "<uid>:<gid>" like "1000:1000"';
+/** Who owns an image project's `data/` folder: numeric uid and gid, each 0-65535. */
+export const DataOwner = z
+  .string({ error: DATA_OWNER_MESSAGE })
+  // One check, so a bad value gets one message.
+  .refine((v) => DATA_OWNER_PATTERN.test(v) && v.split(':').every((n) => Number(n) <= 65535), DATA_OWNER_MESSAGE);
+
+/** "1000:1000" as numbers; the input was checked by `DataOwner`. */
+export function parseDataOwner(owner: string): { uid: number; gid: number } {
+  const [uid, gid] = owner.split(':').map(Number);
+  return { uid: uid!, gid: gid! };
+}
+
 export const ImageSourceFields = z.object({
   imageRef: ImageRef,
   containerPort: Port,
   registryId: z.number().int().positive().nullable().optional(),
   healthPath: HealthPath.nullable().optional(),
   memLimit: MemLimit.nullable().optional(),
+  dataOwner: DataOwner.nullable().optional(),
 });
+
+/** Only image projects have a data owner; a compose service sets `user:` itself. */
+export const COMPOSE_DATA_OWNER_MESSAGE = 'only image projects have a data owner; in a compose file, set user: on the service or use a named volume';
 
 export const ComposeVersionFields = z.object({
   composeYaml: z.string().min(1).max(256 * 1024),
@@ -54,7 +72,9 @@ export type ComposeVersionFields = z.infer<typeof ComposeVersionFields>;
 
 export const CreateProjectInput = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('image'), name: ProjectName, hostname: Hostname.optional() }).extend(ImageSourceFields.shape),
-  z.object({ kind: z.literal('compose'), name: ProjectName, hostname: Hostname.optional() }).extend(ComposeVersionFields.shape),
+  z.object({ kind: z.literal('compose'), name: ProjectName, hostname: Hostname.optional() }).extend(ComposeVersionFields.shape)
+    // Refused rather than silently dropped, so nobody thinks it applies. null is "not set" and is fine.
+    .extend({ dataOwner: z.null({ error: COMPOSE_DATA_OWNER_MESSAGE }).optional() }),
 ]);
 export type CreateProjectInput = z.infer<typeof CreateProjectInput>;
 

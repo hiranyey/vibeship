@@ -171,6 +171,7 @@ export function projectPages(deps: { config: Config; services: Services; view: V
                 </div>
                 ${field({ label: 'Health path', name: 'healthPath', value: f.healthPath, mono: true, placeholder: '/health', help: 'Answers 2xx when healthy. Empty: the container just has to stay up.' })}
                 ${field({ label: 'Memory limit', name: 'memLimit', value: f.memLimit, mono: true, placeholder: '512m' })}
+                ${field({ label: 'Data owner (uid:gid)', name: 'dataOwner', value: f.dataOwner, mono: true, placeholder: '1000:1000', help: 'Set to 1000:1000 for images that run as the node user. Empty: owned by root.' })}
               </div>`
             : html`${textarea({ label: 'compose.yaml', name: 'composeYaml', value: f.composeYaml ?? SAMPLE_COMPOSE, yaml: true, rows: 16, help: html`No privileged settings, ports only on <code class="inline">127.0.0.1</code>, bind mounts only of <code class="inline">./data</code>. Env vars below reach it as <code class="inline">\${NAME}</code> or with <code class="inline">env_file: .env</code>.` })}
               <div class="form-grid">
@@ -199,7 +200,7 @@ export function projectPages(deps: { config: Config; services: Services; view: V
       const env = envInput(f);
       const common = { kind: f.kind, name: f.name?.trim(), hostname: opt(f.hostname) };
       const input = f.kind === 'image'
-        ? { ...common, imageRef: f.imageRef?.trim(), containerPort: int(f.containerPort), registryId: int(f.registryId), healthPath: opt(f.healthPath), memLimit: opt(f.memLimit) }
+        ? { ...common, imageRef: f.imageRef?.trim(), containerPort: int(f.containerPort), registryId: int(f.registryId), healthPath: opt(f.healthPath), memLimit: opt(f.memLimit), dataOwner: opt(f.dataOwner) }
         : { ...common, composeYaml: f.composeYaml, routedService: f.routedService?.trim(), port: int(f.port), healthPath: opt(f.healthPath) };
       const project = s.projects.create(ctx(c), input);
       if (Object.keys(env.set).length > 0) s.env.set(ctx(c), project.id, env);
@@ -270,6 +271,7 @@ export function projectPages(deps: { config: Config; services: Services; view: V
               <div class="props-key">Port</div><div class="props-val mono">${p.image.containerPort}</div>
               <div class="props-key">Health</div><div class="props-val mono">${p.image.healthPath ? `GET ${p.image.healthPath}` : 'container stays up'}</div>
               <div class="props-key">Memory limit</div><div class="props-val mono">${p.image.memLimit ?? 'none'}</div>
+              <div class="props-key">Data owner</div><div class="props-val mono">${p.image.dataOwner ?? 'root'}</div>
               <div class="props-key">Webhook</div><div class="props-val">${p.hasWebhook ? 'configured' : html`none · <a href="${base(p)}/settings">create one</a>`}</div>`
             : html`<div class="props-key">Latest compose</div><div class="props-val">version ${p.compose?.version} · routes to <span class="mono">${p.compose?.routedService}:${p.compose?.port}</span></div>
               <div class="props-key">Health</div><div class="props-val mono">${p.compose?.healthPath ? `GET ${p.compose.healthPath}` : 'container stays up'}</div>`}
@@ -433,6 +435,7 @@ export function projectPages(deps: { config: Config; services: Services; view: V
       registryId: p.image?.registryId ? String(p.image.registryId) : '',
       healthPath: p.image?.healthPath ?? '',
       memLimit: p.image?.memLimit ?? '',
+      dataOwner: p.image?.dataOwner ?? '',
     };
     const registries = s.registries.list();
     const drift = s.deploys.drift(p.id);
@@ -454,7 +457,8 @@ export function projectPages(deps: { config: Config; services: Services; view: V
                 </select>
               </div>
               ${field({ label: 'Health path', name: 'healthPath', value: f.healthPath, mono: true, placeholder: '/health' })}
-              ${field({ label: 'Memory limit', name: 'memLimit', value: f.memLimit, mono: true, placeholder: '512m' })}`
+              ${field({ label: 'Memory limit', name: 'memLimit', value: f.memLimit, mono: true, placeholder: '512m' })}
+              ${field({ label: 'Data owner (uid:gid)', name: 'dataOwner', value: f.dataOwner, mono: true, placeholder: '1000:1000', help: 'Set to 1000:1000 for images that run as the node user. Empty: owned by root.' })}`
             : ''}
         </div>
         ${p.kind === 'compose' ? html`<p class="text-muted t-sm mt-0">The compose file, routed service and port change on the <a href="${base(p)}/compose">Compose</a> tab.</p>` : ''}
@@ -490,6 +494,7 @@ export function projectPages(deps: { config: Config; services: Services; view: V
         ? {
             hostname: f.hostname?.trim(), imageRef: f.imageRef?.trim(), containerPort: int(f.containerPort),
             registryId: int(f.registryId) ?? null, healthPath: optNull(f.healthPath), memLimit: optNull(f.memLimit),
+            dataOwner: optNull(f.dataOwner),
           }
         : { hostname: f.hostname?.trim() };
       const updated = s.projects.update(ctx(c), p.id, changes);

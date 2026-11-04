@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { Db } from '../src/db/db.ts';
@@ -11,6 +12,7 @@ function scratch() {
   db.exec('CREATE TABLE t (v TEXT)');
   return db;
 }
+const tempDirSync = () => mkdtempSync(join(tmpdir(), 'vibeship-migrations-'));
 const values = (db: Db) => db.all<{ v: string }>('SELECT v FROM t ORDER BY rowid').map((r) => r.v);
 
 test('transaction commits and returns the result', () => {
@@ -58,7 +60,7 @@ test('the database is usable again after a rollback', () => {
 
 test('migrate creates every table and seeds settings', () => {
   const db = new Db(':memory:');
-  assert.deepEqual(migrate(db), [1, 2, 3]);
+  assert.deepEqual(migrate(db), [1, 2, 3, 4]);
   const tables = db.all<{ name: string }>(`SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name`).map((r) => r.name);
   for (const t of [
     'api_tokens', 'audit_log', 'compose_versions', 'deploy_logs', 'deploys', 'env_vars', 'image_sources',
@@ -114,6 +116,21 @@ test('migrate refuses a database newer than the build', (t) => {
   migrate(db, dir);
   db.run(`INSERT INTO schema_migrations (version, name) VALUES (2, 'future')`);
   assert.throws(() => migrate(db, dir), /older build/);
+});
+
+test('migration 4 adds image_sources.data_owner as NULL for existing projects', () => {
+  const db = new Db(':memory:');
+  const dir = join(import.meta.dirname, '..', 'src', 'db', 'migrations');
+  // A database as it was before data_owner, with an image project in it.
+  const upTo3 = tempDirSync();
+  for (const f of ['001_init.sql', '002_rendered_files.sql', '003_compose_versions.sql']) writeFileSync(join(upTo3, f), readFileSync(join(dir, f)));
+  assert.deepEqual(migrate(db, upTo3), [1, 2, 3]);
+  db.run(`INSERT INTO projects (id, name, kind, hostname, created_by) VALUES (1, 'old', 'image', 'old.localhost', 'system')`);
+  db.run(`INSERT INTO image_sources (project_id, image_ref, container_port) VALUES (1, 'nginx:1.29', 80)`);
+
+  assert.deepEqual(migrate(db, dir), [4]);
+  assert.deepEqual({ ...db.get<object>('SELECT image_ref, data_owner FROM image_sources WHERE project_id = 1') }, { image_ref: 'nginx:1.29', data_owner: null });
+  rmSync(upTo3, { recursive: true, force: true });
 });
 
 test('file databases use WAL mode', (t) => {

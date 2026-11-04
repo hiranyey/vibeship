@@ -9,9 +9,15 @@ import type { RegistryService } from '../services/registries.ts';
 import type { SettingsService } from '../services/settings.ts';
 import type { ProjectFiles, RenderedFile } from './files.ts';
 import { HEALTH_POLL_MS, HEALTH_STABLE_MS, type HealthTiming, type HttpProbe, healthUrl, waitHealthy } from './health.ts';
-import { COMPOSE_FILE, ENV_FILE, ENV_FILE_MODE } from './layout.ts';
+import { parseDataOwner } from '../schemas.ts';
+import { COMPOSE_FILE, DATA_DIR, ENV_FILE, ENV_FILE_MODE } from './layout.ts';
 import type { DeployLogs } from './logs.ts';
 import { renderEnvFile, renderImageCompose } from './render.ts';
+
+/** The deploy log line after `data/` was given to its owner; the guide quotes it. */
+export const dataOwnerLogLine = (owner: string) => `Data folder owned by ${owner}`;
+/** The start of a deploy's failure reason when that failed; the guide quotes it. */
+export const dataOwnerFailure = (owner: string) => `could not give ${DATA_DIR}/ to ${owner}`;
 
 export type DeployStatus = 'queued' | 'running' | 'healthy' | 'failed';
 
@@ -98,6 +104,8 @@ export class DeployEngine {
         db.run('UPDATE deploys SET digest = ? WHERE id = ?', digest, deployId);
         system(`Image digest ${digest}`);
         target = this.#imageRelease(project, digest);
+        // Before any file is written, so a failure leaves the running version untouched.
+        this.#applyDataOwner(project, system);
         this.#write(project, target, system);
         progress.wroteFiles = true;
       } else {
@@ -174,7 +182,7 @@ export class DeployEngine {
       files: [
         {
           path: COMPOSE_FILE,
-          content: renderImageCompose({ name: project.name, imageRef: image.imageRef, digest, memLimit: image.memLimit }),
+          content: renderImageCompose({ name: project.name, imageRef: image.imageRef, digest, memLimit: image.memLimit, dataOwner: image.dataOwner }),
           mode: 0o644,
         },
         this.#envFile(project),
@@ -249,6 +257,19 @@ export class DeployEngine {
 
   #target(project: Project) {
     return { project: project.name, dir: this.#d.files.dir(project.name) };
+  }
+
+  /** Gives an image project's `data/` to its dataOwner, if it has one. Throws a deploy failure reason. */
+  #applyDataOwner(project: Project, system: (line: string) => void): void {
+    const owner = project.image?.dataOwner;
+    if (!owner) return;
+    let result;
+    try {
+      result = this.#d.files.applyDataOwner(project.name, parseDataOwner(owner));
+    } catch (err) {
+      throw new Error(`${dataOwnerFailure(owner)}: ${(err as Error).message}`);
+    }
+    system(`${dataOwnerLogLine(owner)}${result.recursive && result.entries > 0 ? ` (it had another owner, so ${result.entries} existing ${result.entries === 1 ? 'entry was' : 'entries were'} changed too)` : ''}`);
   }
 
   #write(project: Project, release: Release, system: (line: string) => void): void {

@@ -186,6 +186,47 @@ test('env facts: COMPOSE_/DOCKER_ are the only reserved names, and changes wait 
   assert.equal(h.deploys.drift(p.id).pendingChanges, false);
 });
 
+test('dataOwner facts: the log line, failure reason and compose refusal the guide quotes are the real ones', async (t) => {
+  let fail = false;
+  const h = (() => {
+    const s = setup(t, { lchown: () => { if (fail) throw new Error('EPERM: operation not permitted'); } });
+    const guide = (opts: Omit<Parameters<typeof renderDeployGuide>[0], 'ctx'> = {}) => renderDeployGuide({ ctx: guideContext(s, 'localhost'), ...opts });
+    return { ...s, guide };
+  })();
+  h.fakeDocker.push(REF, 'healthy');
+  const p = h.projects.create(h.ctx, imageProject({ healthPath: null, dataOwner: '1000:1000' }));
+  const ok = h.deploys.request(h.ctx, p.id, {}, 'api');
+  await h.queue.idle();
+  const image = h.guide({ kind: 'image' });
+  const line = h.deploys.logs(ok.id).map((l) => l.line).find((l) => l.startsWith('Data folder owned by'));
+  assert.equal(line, 'Data folder owned by 1000:1000');
+  assert.ok(image.includes('`Data folder owned by <uid>:<gid>`'));
+
+  fail = true;
+  const bad = h.deploys.request(h.ctx, p.id, {}, 'api');
+  await h.queue.idle();
+  assert.match(h.deploys.get(bad.id).failureReason!, /^could not give data\/ to 1000:1000: /);
+  assert.ok(image.includes('`could not give data/ to <uid>:<gid>: <reason>`'));
+  assert.ok(image.includes('the running version keeps serving'));
+  assert.equal(h.projects.get(p.id).status, 'running');
+
+  // Persistent data explains it, and troubleshooting suggests it first.
+  const data = image.slice(image.indexOf('## Persistent data'), image.indexOf('## Env vars'));
+  for (const part of ['dataOwner: "1000:1000"', 'USER node', 'bind mount hides', 'setpriv', 'gosu', 'does not set `user:`']) {
+    assert.ok(data.includes(part), `Persistent data mentions ${part}`);
+  }
+  const trouble = image.slice(image.indexOf('## Troubleshooting'));
+  assert.ok(trouble.includes('First fix: `update_project { dataOwner: "1000:1000" }`'));
+
+  let refusal = '';
+  try { h.projects.create(h.ctx, composeProject({ dataOwner: '1000:1000' })); } catch (err) { refusal = (err as Error).message; }
+  assert.ok(h.guide({ kind: 'compose' }).includes(`\`validation: ${refusal}\``), refusal);
+  assert.ok(!h.guide({ kind: 'compose' }).includes('First fix: `update_project { dataOwner'), 'compose troubleshooting does not suggest it');
+
+  const snap = h.guide({ project: snapshotProject(h, h.projects.get(p.id)) });
+  assert.ok(snap.includes('data owner: `1000:1000` (applied on each deploy)'));
+});
+
 test('networking facts: default hostname, upstream and the public port', (t) => {
   const h = harness(t);
   const p = h.projects.create(h.ctx, composeProject({ port: 3000 }));

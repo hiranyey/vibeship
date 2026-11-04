@@ -3,7 +3,7 @@ import type { Config } from '../config.ts';
 import { SecretBox } from '../crypto/secret-box.ts';
 import type { Db } from '../db/db.ts';
 import { DeployEngine } from '../deploy/engine.ts';
-import { ProjectFiles } from '../deploy/files.ts';
+import { type Lchown, ProjectFiles } from '../deploy/files.ts';
 import { fetchProbe, type HealthTiming, type HttpProbe } from '../deploy/health.ts';
 import { DeployLogs } from '../deploy/logs.ts';
 import { DeployQueue } from '../deploy/queue.ts';
@@ -30,6 +30,8 @@ export function createServices(deps: {
   caddy?: CaddyApi;
   probe?: HttpProbe;
   timing?: Partial<HealthTiming>;
+  /** Replaces `fs.lchownSync` for `data/` ownership, since tests don't run as root. */
+  lchown?: Lchown;
   /** False for processes that share the database but must leave deploys to the server. */
   runDeploys?: boolean;
 }) {
@@ -46,7 +48,7 @@ export function createServices(deps: {
   const tokens = new TokenService({ db, audit });
   const sessions = new SessionService({ db, audit });
   const logs = new DeployLogs(db);
-  const files = new ProjectFiles({ db, stackRoot: config.stackRoot });
+  const files = new ProjectFiles({ db, stackRoot: config.stackRoot, lchown: deps.lchown });
 
   const engine = new DeployEngine({
     db, projects, env, registries, settings, logs, files, docker, caddy,

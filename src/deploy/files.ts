@@ -1,10 +1,21 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lchownSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { sha256Hex } from '../crypto/tokens.ts';
 import type { Db } from '../db/db.ts';
 import { COMPOSE_FILE, DATA_DIR, ENV_FILE } from './layout.ts';
 
 export type RenderedFile = { path: string; content: string; mode: number };
+
+/** Changes the owner of a path itself, never what a symlink points at. Tests swap in a fake, since only root can give files away. */
+export type Lchown = (path: string, uid: number, gid: number) => void;
+
+/** What `applyDataOwner` did, for the deploy log. */
+export type DataOwnerResult = {
+  /** True when the top-level owner differed, so everything inside was chowned too. */
+  recursive: boolean;
+  /** Entries inside `data/` whose owner was set (0 unless recursive). */
+  entries: number;
+};
 
 export type DriftState = 'ok' | 'modified' | 'missing';
 export type FileDrift = { path: string; state: DriftState };
@@ -17,10 +28,12 @@ export type FileDrift = { path: string; state: DriftState };
 export class ProjectFiles {
   readonly #db: Db;
   readonly #stackRoot: string;
+  readonly #lchown: Lchown;
 
-  constructor(deps: { db: Db; stackRoot: string }) {
+  constructor(deps: { db: Db; stackRoot: string; lchown?: Lchown }) {
     this.#db = deps.db;
     this.#stackRoot = deps.stackRoot;
+    this.#lchown = deps.lchown ?? lchownSync;
   }
 
   dir(projectName: string): string {
@@ -45,6 +58,51 @@ export class ProjectFiles {
         );
       }
     });
+  }
+
+  /** `<STACK_ROOT>/<project>/data`. */
+  dataDir(projectName: string): string {
+    return join(this.dir(projectName), DATA_DIR);
+  }
+
+  /**
+   * Creates `data/` if needed and gives it to `uid:gid`.
+   *
+   * When the folder already has that owner, only the folder itself is
+   * chowned, so a normal deploy costs one syscall whatever the folder holds.
+   * When its owner differs (the first deploy after setting or changing
+   * dataOwner), everything inside is chowned too, so files an earlier version
+   * wrote as root become writable. Files inside that were changed by hand
+   * later are not revisited while the top level stays right.
+   *
+   * Symlinks are never followed: `data/` itself must be a real directory, and
+   * inside it links are chowned as links and never descended into. Nothing
+   * outside `data/` is touched.
+   */
+  applyDataOwner(projectName: string, owner: { uid: number; gid: number }): DataOwnerResult {
+    const data = this.dataDir(projectName);
+    mkdirSync(data, { recursive: true });
+    const top = lstatSync(data);
+    if (top.isSymbolicLink() || !top.isDirectory()) {
+      throw new Error(`${DATA_DIR}/ is ${top.isSymbolicLink() ? 'a symlink' : 'not a directory'}, so its owner is left alone`);
+    }
+    const recursive = top.uid !== owner.uid || top.gid !== owner.gid;
+    let entries = 0;
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const path = join(dir, entry.name);
+        this.#lchown(path, owner.uid, owner.gid);
+        entries++;
+        // Dirent types come from lstat, so a symlink to a directory is not one here.
+        // Checked again right before descending, in case it was swapped for a link.
+        if (entry.isDirectory() && lstatSync(path).isDirectory()) walk(path);
+      }
+    };
+    if (recursive) walk(data);
+    // The folder itself last, so an interrupted walk leaves the top level
+    // different and the next deploy walks again.
+    this.#lchown(data, owner.uid, owner.gid);
+    return { recursive, entries };
   }
 
   /** Compares each file Vibeship wrote with what is on disk now. Empty before the first deploy. */

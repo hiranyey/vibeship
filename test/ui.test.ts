@@ -229,6 +229,19 @@ test('settings: update, webhook shown once, stop/start, delete with confirmation
   const p = b.projects.getByName('hello');
   assert.equal(p.hostname, 'hi.localhost');
   assert.deepEqual([p.image!.containerPort, p.image!.healthPath, p.image!.memLimit], [9090, '/up', null]);
+  assert.equal(p.image!.dataOwner, null);
+
+  const page = await (await b.get('/projects/hello/settings')).text();
+  assert.match(page, /Data owner \(uid:gid\)/);
+  assert.match(page, /Set to 1000:1000 for images that run as the node user/);
+  await b.follow(await b.post('/projects/hello/settings', { hostname: 'hi.localhost', imageRef: REF, containerPort: '9090', healthPath: '/up', dataOwner: '1000:1000' }));
+  assert.equal(b.projects.getByName('hello').image!.dataOwner, '1000:1000');
+  assert.match(await (await b.get('/projects/hello/settings')).text(), /id="f-dataOwner" name="dataOwner" type="text"\s+value="1000:1000"/);
+  const badOwner = await b.post('/projects/hello/settings', { hostname: 'hi.localhost', imageRef: REF, containerPort: '9090', dataOwner: '1000' });
+  assert.equal(badOwner.status, 400);
+  assert.ok((await badOwner.text()).includes('dataOwner: must be &quot;&lt;uid&gt;:&lt;gid&gt;&quot; like &quot;1000:1000&quot;'));
+  await b.follow(await b.post('/projects/hello/settings', { hostname: 'hi.localhost', imageRef: REF, containerPort: '9090', healthPath: '/up', dataOwner: '' }));
+  assert.equal(b.projects.getByName('hello').image!.dataOwner, null, 'an empty field clears it');
 
   const bad = await b.post('/projects/hello/settings', { hostname: 'hi.localhost', imageRef: REF, containerPort: 'abc' });
   assert.equal(bad.status, 400);

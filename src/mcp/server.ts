@@ -192,6 +192,7 @@ export function createMcpServer({ services: s, principal, publicUrl, baseDomain 
       registryId: z.number().int().optional().describe('Image projects: a registry id from list_registries; default is the one matching the image host'),
       healthPath: z.string().optional().describe('A path that answers 2xx when the app is healthy, e.g. /health'),
       memLimit: z.string().optional().describe('Image projects: e.g. 512m'),
+      dataOwner: z.string().nullable().optional().describe('Image projects: "<uid>:<gid>" that owns the /data folder, e.g. "1000:1000" for an image that runs as the node user. Default: owned by root'),
       composeYaml: z.string().optional().describe('Compose projects: the compose file'),
       routedService: z.string().optional().describe('Compose projects: the service Caddy routes to'),
       port: z.number().int().optional().describe('Compose projects: the routed service\'s port'),
@@ -201,7 +202,7 @@ export function createMcpServer({ services: s, principal, publicUrl, baseDomain 
   }, (args) => s.projects.create(ctx, defined(args)));
 
   tool('update_project', 'deploy', {
-    description: 'Changes a project\'s hostname, or an image project\'s image, port, health path, registry or memory limit. Takes effect on the next deploy (a hostname change once deployed). Compose files change with update_compose.',
+    description: 'Changes a project\'s hostname, or an image project\'s image, port, health path, registry, memory limit or data owner. Takes effect on the next deploy (a hostname change once deployed). Compose files change with update_compose.',
     inputSchema: {
       project,
       hostname: z.string().optional(),
@@ -210,6 +211,7 @@ export function createMcpServer({ services: s, principal, publicUrl, baseDomain 
       registryId: z.number().int().nullable().optional().describe('A registry id from list_registries, or null to match by image host'),
       healthPath: z.string().nullable().optional(),
       memLimit: z.string().nullable().optional(),
+      dataOwner: z.string().nullable().optional().describe('Image projects: "<uid>:<gid>" that owns /data, e.g. "1000:1000", or null for root. Applied on the next deploy'),
     },
     annotations: write,
   }, ({ project: ref, ...changes }) => s.projects.update(ctx, find(ref).id, defined(changes)));
