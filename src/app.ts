@@ -52,7 +52,7 @@ export function createApp({ config, db, services, oidc }: AppDeps): Hono<AppEnv>
   app.use('/hooks/*', bodyLimit({ maxSize: 16 * 1024, onError: tooLarge }));
   app.use('/api/*', bodyLimit({ maxSize: 1024 * 1024, onError: tooLarge }));
   app.use('/mcp', bodyLimit({ maxSize: 1024 * 1024, onError: tooLarge }));
-  app.all('/mcp', mcpRoute(services));
+  app.all('/mcp', mcpRoute(services, config.publicUrl));
   app.route('/hooks', hookRoutes({ services }));
   app.route('/auth', authRoutes({ config, services, oidc: login }));
   app.route('/api', apiRoutes({ config, services }));

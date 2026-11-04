@@ -15,9 +15,11 @@ Projects are either "image" (a container image from a registry, deployed by dige
 
 Typical flow: create_project, set_env if the app needs configuration, then deploy. deploy returns a deploy id at once; follow it with get_deploy_logs (pass afterSeq to read only new lines) until its status is healthy or failed. A failed deploy never stays live: the last healthy version is brought back. To debug, read get_deploy_logs, get_status and get_container_logs, fix the cause (update_project, update_compose or set_env) and deploy again.
 
-Secret env values are write-only: you can set them, but no tool returns them.`;
+Secret env values are write-only: you can set them, but no tool returns them.
 
-type Deps = { services: Services; principal: Principal };
+For CI-driven deploys of an image project, rotate_webhook (admin) returns a webhook URL once; CI posts the pushed image's digest to it.`;
+
+type Deps = { services: Services; principal: Principal; publicUrl: string };
 
 /** A tool result as pretty JSON text. */
 function json(value: unknown): CallToolResult {
@@ -37,7 +39,7 @@ const write: ToolAnnotations = { readOnlyHint: false, destructiveHint: false, op
  * may use. Every tool calls the same service layer as the HTTP API, and its
  * changes are audited under the token.
  */
-export function createMcpServer({ services: s, principal }: Deps): McpServer {
+export function createMcpServer({ services: s, principal, publicUrl }: Deps): McpServer {
   const server = new McpServer({ name: 'vibeship', version: '0.1.0' }, { instructions: INSTRUCTIONS });
   const ctx = principal.ctx;
 
@@ -92,6 +94,12 @@ export function createMcpServer({ services: s, principal }: Deps): McpServer {
       drift: s.deploys.drift(p.id),
     };
   });
+
+  tool('list_registries', 'read', {
+    description: 'Registry logins for pulling private images: id, name, host, URL, username and whether a token is set (tokens are never returned). An image project uses the registry whose host matches its image; pass registryId to create_project or update_project to pick one explicitly.',
+    inputSchema: {},
+    annotations: read,
+  }, () => s.registries.list());
 
   tool('get_status', 'read', {
     description: 'Live state from Docker: each of the project\'s containers with its state, plus the last deploy.',
@@ -153,7 +161,7 @@ export function createMcpServer({ services: s, principal }: Deps): McpServer {
       hostname: z.string().optional(),
       imageRef: z.string().optional().describe('Image projects: e.g. registry.example.com/library/app:latest'),
       containerPort: z.number().int().optional().describe('Image projects: the port the app listens on'),
-      registryId: z.number().int().optional(),
+      registryId: z.number().int().optional().describe('Image projects: a registry id from list_registries; default is the one matching the image host'),
       healthPath: z.string().optional().describe('A path that answers 2xx when the app is healthy, e.g. /health'),
       memLimit: z.string().optional().describe('Image projects: e.g. 512m'),
       composeYaml: z.string().optional().describe('Compose projects: the compose file'),
@@ -171,7 +179,7 @@ export function createMcpServer({ services: s, principal }: Deps): McpServer {
       hostname: z.string().optional(),
       imageRef: z.string().optional(),
       containerPort: z.number().int().optional(),
-      registryId: z.number().int().nullable().optional(),
+      registryId: z.number().int().nullable().optional().describe('A registry id from list_registries, or null to match by image host'),
       healthPath: z.string().nullable().optional(),
       memLimit: z.string().nullable().optional(),
     },
@@ -236,6 +244,17 @@ export function createMcpServer({ services: s, principal }: Deps): McpServer {
     const p = find(ref);
     await s.deploys.removeProject(ctx, p.id, { deleteData: deleteData ?? false });
     return { deleted: p.name, dataDeleted: deleteData ?? false };
+  });
+
+  tool('rotate_webhook', 'admin', {
+    description: 'Creates the deploy webhook URL for an image project, or replaces the existing one (the old URL stops working at once). CI posts {"digest": "sha256:..."} to it after pushing the image. The URL is returned only this once; store it as a CI secret.',
+    inputSchema: { project },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+  }, ({ project: ref }) => {
+    const p = find(ref);
+    const replaced = p.hasWebhook;
+    const { token, project: updated } = s.projects.rotateWebhook(ctx, p.id);
+    return { url: `${publicUrl}/hooks/deploy/${token}`, replaced, project: updated.name };
   });
 
   return server;

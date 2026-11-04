@@ -72,7 +72,7 @@ A push to `main` then builds, pushes and posts the digest; Vibeship pulls that d
 Vibeship never redeploys itself. To update it:
 
 ```sh
-cd /opt/vibeship-src && git pull && VIBESHIP_HOST=vibeship.hiranyey.dev scripts/bootstrap.sh
+cd /opt/vibeship-src && git pull && VIBESHIP_HOST=vibeship.hiranyey.dev CLOUDFLARE_ONLY=1 scripts/bootstrap.sh
 ```
 
 Settings are kept in `/opt/stack/vibeship/.env`, so a re-run needs only `VIBESHIP_HOST` (plus `CLOUDFLARE_ONLY=1` if you use it). A deploy cut off by the restart is marked failed and the last healthy version is brought back. To change a setting, pass it again; to rotate the origin certificate, pass `ORIGIN_CERT` and `ORIGIN_KEY` again. The script refuses to replace an existing `MASTER_KEY`.

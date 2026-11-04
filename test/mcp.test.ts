@@ -39,7 +39,7 @@ function harness(t: TestContext) {
   return { ...s, app, agent };
 }
 
-const READ_TOOLS = ['get_container_logs', 'get_deploy_logs', 'get_project', 'get_status', 'list_deploys', 'list_projects'];
+const READ_TOOLS = ['get_container_logs', 'get_deploy_logs', 'get_project', 'get_status', 'list_deploys', 'list_projects', 'list_registries'];
 const DEPLOY_TOOLS = ['create_project', 'deploy', 'restart', 'set_env', 'start', 'stop', 'update_compose', 'update_project'];
 
 test('/mcp takes only bearer API tokens, over POST', async (t) => {
@@ -63,7 +63,7 @@ test('each scope lists only the tools it may use', async (t) => {
   const names = async (scope: TokenScope) => (await (await h.agent(scope)).client.listTools()).tools.map((x) => x.name).sort();
   assert.deepEqual(await names('read'), READ_TOOLS);
   assert.deepEqual(await names('deploy'), [...READ_TOOLS, ...DEPLOY_TOOLS].sort());
-  assert.deepEqual(await names('admin'), [...READ_TOOLS, ...DEPLOY_TOOLS, 'delete_project'].sort());
+  assert.deepEqual(await names('admin'), [...READ_TOOLS, ...DEPLOY_TOOLS, 'delete_project', 'rotate_webhook'].sort());
 
   const { call } = await h.agent('read');
   assert.match((await call('create_project', { kind: 'image', name: 'x' })).error!, /not found|Tool create_project/i);
@@ -181,6 +181,37 @@ test('stop drops the route until start; lifecycle waits for deploys and needs a 
   assert.equal(started.status, 'running');
   assert.equal(h.fakeCaddy.routes.size, 1);
   assert.ok(h.audit.list().some((e) => e.action === 'project.stop'));
+});
+
+test('list_registries shows logins without their tokens', async (t) => {
+  const h = harness(t);
+  h.registries.create(h.ctx, { name: 'RepoFlow', url: 'https://repoflow.example.com', username: 'ci', token: 'very-secret' });
+  const { call } = await h.agent('read');
+  const list = await call<Array<{ name: string; host: string; username: string; hasToken: boolean }>>('list_registries');
+  assert.deepEqual(list.map((r) => [r.name, r.host, r.username, r.hasToken]), [['RepoFlow', 'repoflow.example.com', 'ci', true]]);
+  assert.doesNotMatch(JSON.stringify(list), /very-secret/);
+});
+
+test('rotate_webhook returns a working URL once, and rotating replaces it', async (t) => {
+  const h = harness(t);
+  const { call } = await h.agent('admin');
+  await call('create_project', { kind: 'image', name: 'hello', imageRef: REF, containerPort: 8080 });
+
+  const first = await call<{ url: string; replaced: boolean; project: string }>('rotate_webhook', { project: 'hello' });
+  assert.equal(first.replaced, false);
+  assert.equal(first.project, 'hello');
+  assert.match(first.url, /^http:\/\/vibeship\.localhost:8080\/hooks\/deploy\/\S+$/);
+  assert.equal((await call<{ project: { hasWebhook: boolean } }>('get_project', { project: 'hello' })).project.hasWebhook, true);
+  assert.doesNotMatch(JSON.stringify(await call('get_project', { project: 'hello' })), new RegExp(first.url.split('/').at(-1)!));
+
+  const second = await call<{ url: string; replaced: boolean }>('rotate_webhook', { project: 'hello' });
+  assert.equal(second.replaced, true);
+  assert.notEqual(second.url, first.url);
+  const actions = h.audit.list().map((e) => e.action);
+  assert.ok(actions.includes('webhook.create') && actions.includes('webhook.rotate'));
+
+  await call('create_project', { kind: 'compose', name: 'stack', composeYaml: 'services:\n  app:\n    image: nginx:1.29\n', routedService: 'app', port: 80 });
+  assert.match((await call('rotate_webhook', { project: 'stack' })).error ?? '', /^validation: .*only image projects/);
 });
 
 test('delete_project is admin only, and errors come back as tool errors', async (t) => {

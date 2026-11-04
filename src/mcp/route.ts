@@ -12,7 +12,7 @@ import { createMcpServer } from './server.ts';
  * needs a stream or a session. Only API tokens are accepted, not the browser
  * session, so a page can't drive it with the admin's cookie.
  */
-export function mcpRoute(services: Services): Handler<AppEnv> {
+export function mcpRoute(services: Services, publicUrl: string): Handler<AppEnv> {
   return async (c) => {
     const principal = c.get('principal');
     if (principal?.kind !== 'token') {
@@ -23,7 +23,7 @@ export function mcpRoute(services: Services): Handler<AppEnv> {
       return c.json({ error: { code: 'method_not_allowed', message: 'Send MCP requests with POST' } }, 405, { Allow: 'POST' });
     }
 
-    const server = createMcpServer({ services, principal });
+    const server = createMcpServer({ services, principal, publicUrl });
     const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     await server.connect(transport);
     try {
