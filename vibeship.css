@@ -122,13 +122,13 @@
   --font-sans: "Source Serif 4", Georgia, "Times New Roman", serif; /* body/UI face; name kept so existing rules still apply */
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 
-  --text-xs: 11px;
-  --text-sm: 12px;
-  --text-md: 13px;
-  --text-base: 14px;
-  --text-lg: 16px;
-  --text-xl: 20px;
-  --text-2xl: 24px;
+  --text-xs: 13px;
+  --text-sm: 14px;
+  --text-md: 15px;
+  --text-base: 16px;
+  --text-lg: 18px;
+  --text-xl: 22px;
+  --text-2xl: 26px;
 
   --leading-tight: 1.25;
   --leading-normal: 1.45;
@@ -1108,7 +1108,7 @@ code.inline {
 .swatch-meta {
   padding: 6px 8px;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 12px;
   background: var(--bg);
   border-top: var(--border-width) solid var(--border);
 }
@@ -1263,7 +1263,7 @@ code.inline {
   align-items: center;
   gap: 4px;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 12px;
   color: var(--text-muted);
 }
 .docs-space-block {
