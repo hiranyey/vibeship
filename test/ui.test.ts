@@ -124,7 +124,7 @@ test('the wizard creates an image project with env, deploys it, and shows the li
 
   await b.queue.idle();
   const done = await (await b.get(to)).text();
-  assert.match(done, /pill-running" data-status="healthy"/);
+  assert.match(done, /pill-healthy" data-status="healthy"/);
   assert.doesNotMatch(done, /data-stream=/, 'a finished deploy does not stream');
   assert.match(done, /Deploy #1 is live/);
 

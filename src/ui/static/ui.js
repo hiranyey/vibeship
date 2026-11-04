@@ -1,6 +1,6 @@
 // Vibeship's only client script: live logs over server-sent events,
 // confirm prompts, copy buttons, busy buttons, status polling and the
-// dashboard filter and the CPU and memory panels. No build step.
+// dashboard filter and the CPU and memory cards. No build step.
 (() => {
   'use strict';
 
@@ -233,30 +233,18 @@
     sync();
   }
 
-  // ——— Resource panels: <section data-metrics="/api/…" data-metrics-kind="overview|project"> ———
+  // ——— CPU and memory cards: <section data-metrics="/api/…" data-metrics-kind="overview|project"> ———
 
   function fmtBytes(n) {
-    if (!Number.isFinite(n) || n <= 0) return '0 B';
+    if (!Number.isFinite(n) || n <= 0) return ['0', 'B'];
     const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
     let i = 0;
     while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
-    return (n < 10 && i > 0 ? n.toFixed(1) : Math.round(n)) + ' ' + units[i];
+    return [String(n < 10 && i > 0 ? n.toFixed(1) : Math.round(n)), units[i]];
   }
-  const pct = (n) => (n < 10 ? n.toFixed(1) : Math.round(n)) + '%';
+  const bytes = (n) => fmtBytes(n).join(' ');
+  const num = (n) => (n < 10 ? n.toFixed(1) : String(Math.round(n)));
   const clamp = (n) => Math.max(0, Math.min(100, n || 0));
-
-  /** Draws `values` into an svg[data-spark]; `max` null scales to the data. */
-  function drawSpark(svg, values, max) {
-    if (!svg) return;
-    const [area, line] = svg.querySelectorAll('path');
-    if (values.length < 2) { area.setAttribute('d', ''); line.setAttribute('d', ''); return; }
-    const top = max ?? Math.max(1, ...values) * 1.25;
-    const step = 100 / (values.length - 1);
-    const pts = values.map((v, i) => [i * step, 31 - (Math.min(v, top) / top) * 29]);
-    const d = pts.map(([x, y], i) => (i ? 'L' : 'M') + x.toFixed(2) + ' ' + y.toFixed(2)).join(' ');
-    line.setAttribute('d', d);
-    area.setAttribute('d', d + ' L100 32 L0 32 Z');
-  }
 
   function usageCellHtml(text, share, title) {
     const bar = share == null ? '' : '<span class="usage-bar"><i style="width:' + clamp(share) + '%"></i></span>';
@@ -267,12 +255,21 @@
   for (const panel of document.querySelectorAll('[data-metrics]')) {
     const kind = panel.dataset.metricsKind;
     const bind = (key, text) => { const el = panel.querySelector('[data-bind="' + key + '"]'); if (el) el.textContent = text; };
-    const bar = (key, value) => { const el = panel.querySelector('[data-bar="' + key + '"]'); if (el) el.style.width = clamp(value) + '%'; };
-    const spark = (key) => panel.querySelector('[data-spark="' + key + '"]');
     const errorBox = panel.querySelector('[data-bind-error]');
-    const local = [];
     let timer = null;
     let failures = 0;
+
+    /** Fills one card: value + unit, a detail line, and a meter that warns past 75% and 90%. */
+    const tile = (key, value, unit, sub, meter) => {
+      bind(key, value);
+      bind(key + '-unit', unit);
+      bind(key + '-sub', sub);
+      const bar = panel.querySelector('[data-bar="' + key + '"]');
+      if (bar) {
+        bar.style.width = clamp(meter) + '%';
+        bar.dataset.level = meter >= 90 ? 'high' : meter >= 75 ? 'warn' : 'ok';
+      }
+    };
 
     const render = (data) => {
       const h = data.host;
@@ -282,57 +279,37 @@
       errorBox.hidden = !data.dockerError;
       if (data.dockerError) bind('error', data.dockerError);
 
+      const [memUsed, memUnit] = fmtBytes(h.memUsedBytes);
+      tile('vm-cpu', num(h.cpuPercent), '%', h.cores + ' cores · load ' + h.load[0], h.cpuPercent);
+      tile('vm-mem', memUsed, memUnit, 'of ' + bytes(h.memTotalBytes) + ' · ' + num(h.memPercent) + '% used', h.memPercent);
+
       if (kind === 'overview') {
-        bind('cpu', pct(h.cpuPercent));
-        bind('cpu-sub', h.cores + ' cores · load ' + h.load.join(' / '));
-        bind('mem', fmtBytes(h.memUsedBytes));
-        bind('mem-sub', 'of ' + fmtBytes(h.memTotalBytes) + ' · ' + pct(h.memPercent));
-        bar('cpu-total', h.cpuPercent);
-        bar('cpu-part', Math.min(data.apps.cpuShare, h.cpuPercent));
-        bar('mem-total', h.memPercent);
-        bar('mem-part', Math.min(data.apps.memShare, h.memPercent));
-        // The server keeps a point every 15 s; points taken here fill the gap since the last one.
-        local.push({ at: h.at, cpu: h.cpuPercent, mem: h.memPercent });
-        const lastServer = data.history.at(-1)?.at ?? '';
-        const series = [...data.history.map((p) => ({ cpu: p.cpuPercent, mem: p.memPercent })), ...local.filter((p) => p.at > lastServer)].slice(-240);
-        drawSpark(spark('cpu'), series.map((p) => p.cpu), 100);
-        drawSpark(spark('mem'), series.map((p) => p.mem), 100);
-        const busiest = data.projects.slice(0, 3).map((p) => p.project + ' ' + pct(p.cpuShare)).join(', ');
-        bind('note', data.projects.length === 0
-          ? 'No project containers are running.'
-          : 'Projects use ' + pct(data.apps.cpuShare) + ' of CPU and ' + fmtBytes(data.apps.memBytes) + ' of memory' + (busiest ? '. Busiest: ' + busiest + '.' : '.'));
+        const a = data.apps;
+        const [appsMem, appsUnit] = fmtBytes(a.memBytes);
+        const n = data.projects.length;
+        tile('apps-cpu', num(a.cpuShare), '%', n === 0 ? 'nothing running' : n + ' running project' + (n === 1 ? '' : 's'), a.cpuShare);
+        tile('apps-mem', appsMem, appsUnit, num(a.memShare) + '% of the VM', a.memShare);
         const byName = new Map(data.projects.map((p) => [p.project, p]));
         for (const td of document.querySelectorAll('td[data-project][data-usage]')) {
           const u = byName.get(td.dataset.project);
           td.innerHTML = !u ? idle : td.dataset.usage === 'cpu'
-            ? usageCellHtml(pct(u.cpuShare), u.cpuShare, (u.cpuPercent / 100).toFixed(2) + ' cores')
-            : usageCellHtml(fmtBytes(u.memBytes), u.memShare, pct(u.memShare) + ' of the VM');
+            ? usageCellHtml(num(u.cpuShare) + '%', u.cpuShare, (u.cpuPercent / 100).toFixed(2) + ' cores')
+            : usageCellHtml(bytes(u.memBytes), u.memShare, num(u.memShare) + '% of the VM');
         }
       } else {
         const u = data.usage;
-        bind('cpu', pct(u.cpuShare));
-        bind('cpu-sub', (u.cpuPercent / 100).toFixed(2) + ' of ' + h.cores + ' cores · VM at ' + pct(h.cpuPercent));
-        bind('mem', fmtBytes(u.memBytes));
-        bind('mem-sub', pct(u.memShare) + ' of ' + fmtBytes(h.memTotalBytes) + ' · VM at ' + pct(h.memPercent));
-        bar('cpu-total', Math.max(h.cpuPercent, u.cpuShare));
-        bar('cpu-part', u.cpuShare);
-        bar('mem-total', Math.max(h.memPercent, u.memShare));
-        bar('mem-part', u.memShare);
-        local.push({ cpu: u.cpuShare, mem: u.memBytes });
-        if (local.length > 120) local.shift();
-        drawSpark(spark('cpu'), local.map((p) => p.cpu), null);
-        drawSpark(spark('mem'), local.map((p) => p.mem), null);
-        bind('note', u.containers === 0
-          ? 'No running containers, so nothing to measure.'
-          : u.containers + ' running container' + (u.containers === 1 ? '' : 's') + '. CPU is a share of all ' + h.cores + ' cores; the graphs cover the time this page has been open.');
+        const [pMem, pUnit] = fmtBytes(u.memBytes);
+        const running = u.containers > 0;
+        tile('p-cpu', running ? num(u.cpuShare) : '—', running ? '%' : '', running ? (u.cpuPercent / 100).toFixed(2) + ' of ' + h.cores + ' cores' : 'not running', u.cpuShare);
+        tile('p-mem', running ? pMem : '—', running ? pUnit : '', running ? num(u.memShare) + '% of the VM' : 'not running', u.memShare);
         const byName = new Map(data.containers.map((c) => [c.name, c]));
         for (const td of document.querySelectorAll('td[data-ct][data-usage]')) {
           const c = byName.get(td.dataset.ct);
           const f = td.dataset.usage;
           td.innerHTML = !c ? idle
-            : f === 'cpu' ? usageCellHtml(pct(c.cpuShare), c.cpuShare, (c.cpuPercent / 100).toFixed(2) + ' cores')
-            : f === 'mem' ? usageCellHtml(fmtBytes(c.memBytes), c.memLimitBytes ? (c.memBytes / c.memLimitBytes) * 100 : null, 'limit ' + fmtBytes(c.memLimitBytes))
-            : f === 'net' ? '<span class="usage">' + fmtBytes(c.netRxBytes) + ' / ' + fmtBytes(c.netTxBytes) + '</span>'
+            : f === 'cpu' ? usageCellHtml(num(c.cpuShare) + '%', c.cpuShare, (c.cpuPercent / 100).toFixed(2) + ' cores')
+            : f === 'mem' ? usageCellHtml(bytes(c.memBytes), c.memLimitBytes ? (c.memBytes / c.memLimitBytes) * 100 : null, 'limit ' + bytes(c.memLimitBytes))
+            : f === 'net' ? '<span class="usage">' + bytes(c.netRxBytes) + ' / ' + bytes(c.netTxBytes) + '</span>'
             : '<span class="usage">' + c.pids + '</span>';
         }
       }

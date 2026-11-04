@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import { type Context, Hono, type MiddlewareHandler } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import type { Config } from '../config.ts';
@@ -6,6 +5,7 @@ import { AppError } from '../errors.ts';
 import type { AppEnv } from '../http/auth.ts';
 import type { Services } from '../services/index.ts';
 import { adminPages } from './admin.ts';
+import { type Loaded, readAsset, STATIC } from './assets.ts';
 import { projectPages } from './projects.ts';
 import { View } from './view.ts';
 
@@ -18,12 +18,6 @@ export function isUiPath(path: string): boolean {
 
 const brand = (file: string) => new URL(`../../brand/${file}`, import.meta.url);
 const font = (file: string) => ({ file: new URL(`../../fonts/${file}`, import.meta.url), type: 'font/woff2' });
-
-const STATIC: Record<string, { file: URL; type: string }> = {
-  'vibeship.css': { file: new URL('../../vibeship.css', import.meta.url), type: 'text/css; charset=utf-8' },
-  'ui.js': { file: new URL('./static/ui.js', import.meta.url), type: 'text/javascript; charset=utf-8' },
-  'vibeship-mark.svg': { file: brand('vibeship-mark.svg'), type: 'image/svg+xml' },
-};
 
 /** Self-hosted web fonts from `fonts/`, referenced by `vibeship.css` as `fonts/<file>`. */
 const FONTS: Record<string, { file: URL; type: string }> = Object.fromEntries(
@@ -54,20 +48,17 @@ export function uiRoutes(deps: { config: Config; services: Services }): { app: H
   const view = new View(deps.config);
   const app = new Hono<AppEnv>();
 
-  // Read once at startup; in development node --watch restarts on changes to src/.
-  const load = (files: typeof STATIC) => Object.fromEntries(Object.entries(files).map(([name, { file, type }]) => [name, { body: readFileSync(file), type }]));
-  const assets = load(STATIC);
-  const send = (c: Context<AppEnv>, asset: { body: Buffer; type: string } | undefined) => {
+  const send = (c: Context<AppEnv>, asset: Loaded | undefined) => {
     if (!asset) throw new AppError('not_found', 'Not found');
     c.header('Content-Type', asset.type);
-    c.header('Cache-Control', 'public, max-age=300');
+    // A URL carrying the current version never changes; anything else is checked every time.
+    c.header('Cache-Control', c.req.query('v') === asset.version ? 'public, max-age=31536000, immutable' : 'no-cache');
     c.header('X-Content-Type-Options', 'nosniff');
     return c.body(new Uint8Array(asset.body));
   };
-  const fonts = load(FONTS);
-  app.get('/static/:file', (c) => send(c, assets[c.req.param('file')]));
-  app.get('/static/fonts/:file', (c) => send(c, fonts[c.req.param('file')]));
-  for (const [name, asset] of Object.entries(load(ROOT_ICONS))) app.get(`/${name}`, (c) => send(c, asset));
+  app.get('/static/:file', (c) => send(c, readAsset(c.req.param('file'), STATIC)));
+  app.get('/static/fonts/:file', (c) => send(c, readAsset(c.req.param('file'), FONTS)));
+  for (const name of Object.keys(ROOT_ICONS)) app.get(`/${name}`, (c) => send(c, readAsset(name, ROOT_ICONS)));
 
   const guard: MiddlewareHandler<AppEnv> = async (c, next) => {
     const p = c.get('principal');

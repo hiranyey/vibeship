@@ -21,10 +21,10 @@ test('docker stats sizes parse in decimal and binary units', () => {
   assert.deepEqual(parsePair('1.2kB / 3kB'), [1200, 3000]);
 });
 
-test('the host monitor measures CPU between readings and keeps history', async () => {
+test('the host monitor measures CPU between readings', async () => {
   const src = new FakeHost();
   src.cpuPercent = 40;
-  const m = new HostMonitor({ source: src, intervalMs: 1000, historyMs: 3000 });
+  const m = new HostMonitor({ source: src });
   const s = await m.sample();
   assert.equal(s.cpuPercent, 40);
   assert.equal(s.cores, 4);
@@ -32,7 +32,6 @@ test('the host monitor measures CPU between readings and keeps history', async (
   assert.equal(s.memUsedBytes, 2 * GiB);
   assert.equal(s.memPercent, 25);
   assert.deepEqual(await Promise.all([m.sample(), m.sample()]), [s, s], 'a recent sample is reused');
-  assert.deepEqual(m.history(), [], 'history fills only once started');
 });
 
 test('usage is summed per project and shared out against the VM', async (t) => {

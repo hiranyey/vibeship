@@ -25,8 +25,6 @@ export type HostSnapshot = {
   at: string;
 };
 
-export type HostPoint = { at: string; cpuPercent: number; memPercent: number };
-
 export type HostSource = {
   cpuTimes(): CpuTimes;
   memory(): { totalBytes: number; availableBytes: number };
@@ -78,39 +76,32 @@ const round1 = (n: number) => Math.round(n * 10) / 10;
 /**
  * Takes host samples. CPU use needs two readings, so each sample is measured
  * against the previous one; with none recent enough, it takes a short one.
- * `start()` samples in the background to keep an hour of history.
+ * `start()` samples in the background, so a page's reading covers the last
+ * few seconds rather than a 250 ms snapshot.
  */
 export class HostMonitor {
   readonly #source: HostSource;
   readonly #intervalMs: number;
-  readonly #keep: number;
-  readonly #history: HostPoint[] = [];
   #last: { times: CpuTimes; ms: number } | null = null;
   #latest: HostSnapshot | null = null;
   #timer: NodeJS.Timeout | null = null;
   #pending: Promise<HostSnapshot> | null = null;
 
-  constructor(opts: { source?: HostSource; intervalMs?: number; historyMs?: number } = {}) {
+  constructor(opts: { source?: HostSource; intervalMs?: number } = {}) {
     this.#source = opts.source ?? systemSource;
     this.#intervalMs = opts.intervalMs ?? 15_000;
-    this.#keep = Math.ceil((opts.historyMs ?? 3_600_000) / this.#intervalMs);
   }
 
   start(): void {
     if (this.#timer) return;
-    void this.sample().then((s) => this.#record(s));
-    this.#timer = setInterval(() => void this.sample().then((s) => this.#record(s)), this.#intervalMs);
+    void this.sample();
+    this.#timer = setInterval(() => void this.sample(), this.#intervalMs);
     this.#timer.unref();
   }
 
   stop(): void {
     if (this.#timer) clearInterval(this.#timer);
     this.#timer = null;
-  }
-
-  /** Samples taken by `start()`, oldest first. */
-  history(): HostPoint[] {
-    return [...this.#history];
   }
 
   /** A fresh sample, or the last one if it is under a second old. Concurrent callers share one. */
@@ -144,12 +135,5 @@ export class HostMonitor {
       at: new Date().toISOString(),
     };
     return this.#latest;
-  }
-
-  #record(s: HostSnapshot): void {
-    const last = this.#history.at(-1);
-    if (last?.at === s.at) return;
-    this.#history.push({ at: s.at, cpuPercent: s.cpuPercent, memPercent: s.memPercent });
-    if (this.#history.length > this.#keep) this.#history.splice(0, this.#history.length - this.#keep);
   }
 }

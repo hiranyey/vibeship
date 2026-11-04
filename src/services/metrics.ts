@@ -1,5 +1,5 @@
 import type { ContainerStats, DockerRunner } from '../docker/runner.ts';
-import type { HostMonitor, HostPoint, HostSnapshot } from '../system/host.ts';
+import type { HostMonitor, HostSnapshot } from '../system/host.ts';
 import type { ProjectService } from './projects.ts';
 
 /** One project's share of the machine, summed over its running containers. */
@@ -17,7 +17,6 @@ export type ProjectUsage = {
 
 export type MetricsOverview = {
   host: HostSnapshot;
-  history: HostPoint[];
   /** Every project with running containers, busiest CPU first. */
   projects: ProjectUsage[];
   /** All Vibeship projects together. */
@@ -86,7 +85,7 @@ export class MetricsService {
     };
   }
 
-  /** The VM, its last hour, and every project's share of it. */
+  /** The VM and every project's share of it. */
   async overview(): Promise<MetricsOverview> {
     const { host, stats, dockerError } = await this.#both();
     const names = new Set(this.#projects.list().map((p) => p.name));
@@ -99,7 +98,6 @@ export class MetricsService {
     const all = this.#usage('', [...byProject.values()].flat(), host);
     return {
       host,
-      history: this.#host.history(),
       projects,
       apps: { cpuShare: all.cpuShare, memBytes: all.memBytes, memShare: all.memShare },
       dockerError,

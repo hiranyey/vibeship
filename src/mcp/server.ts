@@ -108,9 +108,7 @@ export function createMcpServer({ services: s, principal, publicUrl, baseDomain 
     inputSchema: { project: project.optional() },
     annotations: read,
   }, async ({ project: ref }) => {
-    if (ref) return s.metrics.project(find(ref).id);
-    const { history: _history, ...rest } = await s.metrics.overview();
-    return rest;
+    return ref ? s.metrics.project(find(ref).id) : s.metrics.overview();
   });
 
   tool('list_deploys', 'read', {

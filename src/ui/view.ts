@@ -5,6 +5,7 @@ import type { HtmlEscapedString } from 'hono/utils/html';
 import type { Config } from '../config.ts';
 import type { AppEnv } from '../http/auth.ts';
 import { cookieSettings } from '../http/auth.ts';
+import { assetUrl } from './assets.ts';
 
 export type Html = HtmlEscapedString | Promise<HtmlEscapedString>;
 
@@ -123,8 +124,8 @@ export class View {
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>${opts.title} · Vibeship</title>
     ${raw(ICON_LINKS)}
-    <link rel="stylesheet" href="/static/vibeship.css" />
-    <script src="/static/ui.js" defer></script>
+    <link rel="stylesheet" href="${assetUrl('vibeship.css')}" />
+    <script src="${assetUrl('ui.js')}" defer></script>
   </head>
   <body>
     <div class="app-shell">
@@ -194,7 +195,7 @@ export function alert(kind: Flash['kind'], text: Html | string, title?: string, 
 
 const PILL: Record<string, string> = {
   running: 'running',
-  healthy: 'running',
+  healthy: 'healthy',
   deploying: 'deploying',
   running_deploy: 'deploying',
   failed: 'failed',

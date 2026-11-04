@@ -6,6 +6,7 @@ import { systemContext } from '../actor.ts';
 import type { OidcClient, LoginAttempt } from '../auth/oidc.ts';
 import type { Config } from '../config.ts';
 import type { Services } from '../services/index.ts';
+import { assetUrl } from '../ui/assets.ts';
 import { CSP, ICON_LINKS } from '../ui/view.ts';
 import { type AppEnv, cookieSettings } from './auth.ts';
 
@@ -32,7 +33,7 @@ function page(c: Context<AppEnv>, opts: { title: string; host: string; status?: 
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>${opts.title} · Vibeship</title>
         ${raw(ICON_LINKS)}
-        <link rel="stylesheet" href="/static/vibeship.css" />
+        <link rel="stylesheet" href="${assetUrl('vibeship.css')}" />
       </head>
       <body class="auth-page">
         <main class="card card-pad auth-card">

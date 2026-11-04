@@ -2,96 +2,51 @@ import { html } from 'hono/html';
 import type { Html } from './view.ts';
 
 /**
- * Resource panels. They render with placeholders; ui.js fetches the numbers
- * (`docker stats` takes a second or two, so pages don't wait for it) and
- * refreshes them every few seconds. Elements are found by `data-bind`
- * (text), `data-bar` (width in %) and `data-spark` (a sparkline).
+ * CPU and memory cards. They render with placeholders; ui.js fetches the
+ * latest numbers (`docker stats` takes a second or two, so pages don't wait
+ * for it) and refreshes them every few seconds. ui.js finds the parts by
+ * `data-bind` (text) and `data-bar` (meter width in %).
  */
 
 const DASH = '—';
 
-function meter(label: string, key: string, legend: [string, string]): Html {
-  return html`<div class="meter" role="img" aria-label="${label}">
-      <div class="meter-fill meter-total" data-bar="${key}-total"></div>
-      <div class="meter-fill meter-part" data-bar="${key}-part"></div>
+/** One card: a label, a big number, a line of detail and a meter. */
+function tile(key: string, label: string, hint: string): Html {
+  return html`<div class="metric-card" data-tile="${key}">
+    <div class="metric-label">${label}</div>
+    <div class="metric-value"><span data-bind="${key}">${DASH}</span><span class="metric-unit" data-bind="${key}-unit"></span></div>
+    <div class="metric-sub" data-bind="${key}-sub">${hint}</div>
+    <div class="meter" aria-hidden="true"><div class="meter-fill" data-bar="${key}"></div></div>
+  </div>`;
+}
+
+function panel(url: string, kind: 'overview' | 'project', title: string, tiles: Html): Html {
+  return html`<section class="metrics" data-metrics="${url}" data-metrics-kind="${kind}" aria-label="${title}" aria-busy="true">
+    <div class="metrics-head">
+      <h2 class="section-title">${title}</h2>
+      <span class="metrics-updated"><span class="live-dot"></span><span data-bind="updated">loading…</span></span>
     </div>
-    <div class="meter-legend"><span><i class="swatch-part"></i>${legend[0]}</span><span><i class="swatch-total"></i>${legend[1]}</span></div>`;
+    <div class="metrics-grid">${tiles}</div>
+    <div class="alert alert-warning" data-bind-error hidden><div><div class="alert-title">Docker did not answer</div><div class="alert-body" data-bind="error"></div></div></div>
+  </section>`;
 }
 
-function spark(key: string): Html {
-  return html`<svg class="spark" data-spark="${key}" viewBox="0 0 100 32" preserveAspectRatio="none" aria-hidden="true"><path class="spark-area" d=""></path><path class="spark-line" d=""></path></svg>`;
-}
-
-/** The VM's CPU and memory with the last hour, for the dashboard. */
+/** The VM's CPU and memory, and what all projects use of them, for the dashboard. */
 export function hostPanel(): Html {
-  return html`<section class="metrics" data-metrics="/api/metrics" data-metrics-kind="overview" aria-labelledby="metrics-title" aria-busy="true">
-    <div class="metrics-head">
-      <h2 class="section-title" id="metrics-title">Server</h2>
-      <span class="metrics-updated"><span class="live-dot"></span><span data-bind="updated">loading…</span></span>
-    </div>
-    <div class="metrics-grid">
-      <div class="metric-card">
-        <div class="metric-top">
-          <div>
-            <div class="stat-label">CPU</div>
-            <div class="metric-value" data-bind="cpu">${DASH}</div>
-            <div class="metric-sub" data-bind="cpu-sub">&nbsp;</div>
-          </div>
-          ${spark('cpu')}
-        </div>
-        ${meter('CPU in use', 'cpu', ['projects', 'everything else'])}
-      </div>
-      <div class="metric-card">
-        <div class="metric-top">
-          <div>
-            <div class="stat-label">Memory</div>
-            <div class="metric-value" data-bind="mem">${DASH}</div>
-            <div class="metric-sub" data-bind="mem-sub">&nbsp;</div>
-          </div>
-          ${spark('mem')}
-        </div>
-        ${meter('Memory in use', 'mem', ['projects', 'everything else'])}
-      </div>
-    </div>
-    <p class="metrics-note text-muted t-sm" data-bind="note">&nbsp;</p>
-    <div class="alert alert-warning metrics-error" data-bind-error hidden><div><div class="alert-title">Docker did not answer</div><div class="alert-body" data-bind="error"></div></div></div>
-  </section>`;
+  return panel('/api/metrics', 'overview', 'Server', html`
+    ${tile('vm-cpu', 'CPU', 'of the VM')}
+    ${tile('vm-mem', 'Memory', 'of the VM')}
+    ${tile('apps-cpu', 'Projects CPU', 'all projects together')}
+    ${tile('apps-mem', 'Projects memory', 'all projects together')}`);
 }
 
-/** A project's CPU and memory against the VM, for its overview. */
+/** A project's CPU and memory next to the VM's, for its overview. */
 export function projectPanel(projectId: number): Html {
-  return html`<section class="metrics" data-metrics="/api/projects/${projectId}/metrics" data-metrics-kind="project" aria-labelledby="metrics-title" aria-busy="true">
-    <div class="metrics-head">
-      <h2 class="section-title" id="metrics-title">Resource usage</h2>
-      <span class="metrics-updated"><span class="live-dot"></span><span data-bind="updated">loading…</span></span>
-    </div>
-    <div class="metrics-grid">
-      <div class="metric-card">
-        <div class="metric-top">
-          <div>
-            <div class="stat-label">CPU</div>
-            <div class="metric-value" data-bind="cpu">${DASH}</div>
-            <div class="metric-sub" data-bind="cpu-sub">&nbsp;</div>
-          </div>
-          ${spark('cpu')}
-        </div>
-        ${meter('CPU: this project against the whole VM', 'cpu', ['this project', 'rest of the VM'])}
-      </div>
-      <div class="metric-card">
-        <div class="metric-top">
-          <div>
-            <div class="stat-label">Memory</div>
-            <div class="metric-value" data-bind="mem">${DASH}</div>
-            <div class="metric-sub" data-bind="mem-sub">&nbsp;</div>
-          </div>
-          ${spark('mem')}
-        </div>
-        ${meter('Memory: this project against the whole VM', 'mem', ['this project', 'rest of the VM'])}
-      </div>
-    </div>
-    <p class="metrics-note text-muted t-sm" data-bind="note">&nbsp;</p>
-    <div class="alert alert-warning metrics-error" data-bind-error hidden><div><div class="alert-title">Docker did not answer</div><div class="alert-body" data-bind="error"></div></div></div>
-  </section>`;
+  return panel(`/api/projects/${projectId}/metrics`, 'project', 'Resource usage', html`
+    ${tile('p-cpu', 'CPU', 'this project')}
+    ${tile('p-mem', 'Memory', 'this project')}
+    ${tile('vm-cpu', 'VM CPU', 'whole machine')}
+    ${tile('vm-mem', 'VM memory', 'whole machine')}`);
 }
 
 /** An empty table cell ui.js fills with a project's or container's usage. */
