@@ -129,6 +129,8 @@ Caddy runs as its own container with its admin API listening on port 2019 only o
 | `list_deploys` | read | Recent deploys for a project |
 | `get_deploy_logs` | read | Log lines for one deploy |
 | `get_container_logs` | read | Tail of a container's logs |
+| `list_registries` | read | Registry logins (no tokens), for picking `registryId` |
+| `get_deploy_guide` | read | How to ship an app, as markdown: image and registry, data, env, networking, health checks, the compose allowlist, a CI workflow, troubleshooting; with `project`, filled in with that project's values (never secrets or webhook URLs) |
 | `create_project` | deploy | New image or compose project with hostname |
 | `update_project` | deploy | Change the hostname, or an image project's image, port or health path |
 | `update_compose` | deploy | Save a new compose version |
@@ -136,6 +138,9 @@ Caddy runs as its own container with its admin API listening on port 2019 only o
 | `deploy` | deploy | Deploy latest, a digest or a compose version; returns a deploy id |
 | `restart`, `stop`, `start` | deploy | Container lifecycle |
 | `delete_project` | admin | Remove containers, route and rows; keeps `data/` unless asked |
+| `rotate_webhook` | admin | Create or replace an image project's webhook URL, returned once |
+
+Every token also gets the resource `vibeship://guide` (the general deploy guide) and the prompt `ship_new_app` (the setup order for a new app: guide, `create_project`, `set_env`, `rotate_webhook`, first CI push, verify). The server's `instructions` on initialize summarise the contract and point to `get_deploy_guide`. The guide is generated from the constants the deploy code uses (`src/deploy/layout.ts`, the compose allowlist, the health check timings, the settings), and `test/guide.test.ts` checks it against the code's behaviour.
 
 The endpoint uses `@modelcontextprotocol/sdk` over Streamable HTTP at `https://vibeship.hiranyey.dev/mcp`, authenticated with `Authorization: Bearer <token>`; a browser session cookie is not accepted. It is stateless: every tool returns at once, so each POST gets a plain JSON reply and there are no sessions. A token is only shown the tools its scope allows. `deploy` returns at once with a deploy id, and the agent follows progress with `get_deploy_logs` and `get_status`.
 

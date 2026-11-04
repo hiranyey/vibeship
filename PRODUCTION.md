@@ -63,7 +63,7 @@ Then log in at `https://vibeship.hiranyey.dev`.
 
 1. In Vibeship, create an image project with image `repoflow.hiranyey.dev/library/<app>:latest`, its port and a health path.
 2. On its Settings tab, create the webhook URL.
-3. Copy `examples/github-actions/deploy.yml` to the app's repository as `.github/workflows/deploy.yml`, set `IMAGE`, and add the secrets `REPOFLOW_USERNAME`, `REPOFLOW_TOKEN` (a login that can push) and `VIBESHIP_WEBHOOK_URL`.
+3. Copy `examples/github-actions/deploy.yml` to the app's repository as `.github/workflows/deploy.yml`, set `IMAGE`, and add the secrets `REPOFLOW_USERNAME`, `REPOFLOW_PASSWORD` (a login that can push) and `WEBHOOK_URL`. The file is generated from `githubWorkflow` in `src/mcp/guide.ts`, and `get_deploy_guide` with a project returns the same workflow with that project's repository filled in.
 
 A push to `main` then builds, pushes and posts the digest; Vibeship pulls that digest, health checks it and only then routes `<app>.hiranyey.dev` to it.
 

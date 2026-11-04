@@ -27,7 +27,9 @@ export const ImageRef = z
   .max(255)
   .regex(/^[a-z0-9][A-Za-z0-9._/:-]*$/, 'must be an image reference like registry/library/app:tag, without a digest');
 
-export const Digest = z.string().regex(/^sha256:[a-f0-9]{64}$/, 'must be sha256:<64 hex characters>');
+/** An image digest, as the webhook and `deploy` accept it. */
+export const DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/;
+export const Digest = z.string().regex(DIGEST_PATTERN, 'must be sha256:<64 hex characters>');
 
 const HealthPath = z.string().max(255).regex(/^\/\S*$/, 'must start with /');
 const MemLimit = z.string().regex(/^\d+[kmg]?$/i, 'must look like 512m or 1g');
@@ -64,12 +66,16 @@ export const UpdateProjectInput = z
   .refine((v) => Object.keys(v).length > 0, 'nothing to update');
 export type UpdateProjectInput = z.infer<typeof UpdateProjectInput>;
 
+export const ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
+/** Compose reads these from the project's .env as its own settings, e.g. COMPOSE_FILE. Matched case-insensitively. */
+export const RESERVED_ENV_PREFIXES = ['COMPOSE_', 'DOCKER_'] as const;
+export const ENV_VALUE_MAX_BYTES = 64 * 1024;
+
 export const EnvKey = z
   .string()
-  .regex(/^[A-Za-z_][A-Za-z0-9_]{0,127}$/, 'must be a valid environment variable name')
-  // Compose reads these from the project's .env as its own settings, e.g. COMPOSE_FILE.
-  .refine((k) => !/^(COMPOSE|DOCKER)_/i.test(k), 'COMPOSE_* and DOCKER_* names are reserved for Docker');
-const EnvValue = z.string().max(64 * 1024).refine((v) => !v.includes('\0'), 'must not contain NUL');
+  .regex(ENV_KEY_PATTERN, 'must be a valid environment variable name')
+  .refine((k) => !RESERVED_ENV_PREFIXES.some((p) => k.toUpperCase().startsWith(p)), 'COMPOSE_* and DOCKER_* names are reserved for Docker');
+const EnvValue = z.string().max(ENV_VALUE_MAX_BYTES).refine((v) => !v.includes('\0'), 'must not contain NUL');
 
 /** MCP `set_env`: set some keys and unset others, leaving the rest alone. */
 export const SetEnvInput = z

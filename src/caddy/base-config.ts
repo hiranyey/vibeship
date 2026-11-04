@@ -12,6 +12,9 @@ import { CADDY_SERVER } from './client.ts';
 /** The admin API listens on the internal `caddy-admin` network only, never on `web`. */
 export const CADDY_ADMIN_ADDRESS = '172.31.250.2';
 
+/** The only port published on the host, by Caddy: 443 with the origin certificate, 80 with TLS off (local runs). */
+export const CADDY_PUBLIC_PORT = { 'origin-cert': 443, off: 80 } as const;
+
 export type BaseConfigOptions = {
   /** Vibeship's own hostname, e.g. vibeship.hiranyey.dev. */
   host: string;
@@ -27,7 +30,7 @@ export function caddyBaseConfig(o: BaseConfigOptions): Record<string, unknown> {
   if (!/^[a-z0-9.-]+$/.test(o.host)) throw new Error(`not a hostname: ${o.host}`);
 
   const server: Record<string, unknown> = {
-    listen: [tls ? ':443' : ':80'],
+    listen: [`:${CADDY_PUBLIC_PORT[o.tlsMode]}`],
     // Certificates come from the Cloudflare origin certificate, never from ACME,
     // and nothing listens on :80 in production to redirect.
     automatic_https: { disable: true },

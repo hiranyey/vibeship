@@ -1,18 +1,15 @@
-# Builds the app, pushes it to RepoFlow and asks Vibeship to deploy that exact
-# digest. Copy it to .github/workflows/deploy.yml in the app's repository.
+# Builds the app, pushes it with two tags (:latest and :<git sha>) and asks
+# Vibeship to deploy that exact digest. Copy it to .github/workflows/deploy.yml
+# in the app's repository.
 #
-# Set up once:
-# - In Vibeship, create an image project whose image is IMAGE:latest (below),
-#   and create its webhook URL on the project's Settings tab.
-# - In the repository's Settings > Secrets and variables > Actions, add:
-#     REPOFLOW_USERNAME, REPOFLOW_TOKEN  a RepoFlow login that can push
-#     VIBESHIP_WEBHOOK_URL               the webhook URL (it is a secret: anyone
-#                                        holding it can deploy this project)
+# Repository secrets (Settings > Secrets and variables > Actions):
+#   REPOFLOW_USERNAME, REPOFLOW_PASSWORD  a registry login that can push IMAGE
+#   WEBHOOK_URL  the URL rotate_webhook returned once. It is a secret:
+#                anyone holding it can deploy the project, so never echo it.
 #
-# Vibeship pulls IMAGE@<digest>, health checks it and only then routes traffic
-# to it; if it fails, the previous version keeps serving and the run below
-# still succeeds (the webhook only queues the deploy). Watch the deploy in the
-# Vibeship UI, or with get_deploy_logs over MCP.
+# The webhook only queues the deploy. Vibeship pulls IMAGE@<digest>, health
+# checks it and only then routes traffic to it; if it fails, the previous
+# version keeps serving. Check the outcome with list_deploys or get_deploy_logs.
 name: Deploy
 
 on:
@@ -29,9 +26,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  REGISTRY: repoflow.hiranyey.dev
-  # Change this to the app's repository in RepoFlow.
-  IMAGE: repoflow.hiranyey.dev/library/my-app
+  IMAGE: api.repoflow.io/hiranyeyg-6713/vibes/my-app
 
 jobs:
   deploy:
@@ -44,9 +39,9 @@ jobs:
 
       - uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY }}
+          registry: api.repoflow.io
           username: ${{ secrets.REPOFLOW_USERNAME }}
-          password: ${{ secrets.REPOFLOW_TOKEN }}
+          password: ${{ secrets.REPOFLOW_PASSWORD }}
 
       - name: Build and push
         id: build
@@ -56,7 +51,7 @@ jobs:
           push: true
           # The server's architecture.
           platforms: linux/amd64
-          # A plain image manifest, without attestations.
+          # A plain image manifest, without attestations, so the digest is the image's.
           provenance: false
           tags: |
             ${{ env.IMAGE }}:latest
@@ -65,13 +60,16 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Deploy
+        shell: bash
         env:
-          WEBHOOK_URL: ${{ secrets.VIBESHIP_WEBHOOK_URL }}
+          WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          test -n "$WEBHOOK_URL" || { echo "::error::Add the VIBESHIP_WEBHOOK_URL secret"; exit 1; }
+          set -euo pipefail
+          if [[ -z "$WEBHOOK_URL" ]]; then echo "::error::Add the WEBHOOK_URL repository secret"; exit 1; fi
+          if [[ ! "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]; then echo "::error::Unexpected image digest: $DIGEST"; exit 1; fi
           body=$(jq -nc --arg digest "$DIGEST" --arg image "$IMAGE" '{digest: $digest, image: $image}')
-          curl --fail-with-body -sS --retry 3 --retry-all-errors \
-            -X POST "$WEBHOOK_URL" -H 'Content-Type: application/json' -d "$body"
+          # The URL is passed from the environment and never printed.
+          curl -fsS --retry 3 -X POST -H 'Content-Type: application/json' -d "$body" "$WEBHOOK_URL"
           echo
           echo "Queued a deploy of $IMAGE@$DIGEST" >> "$GITHUB_STEP_SUMMARY"

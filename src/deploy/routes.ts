@@ -1,6 +1,9 @@
 import type { CaddyApi, RouteSpec } from '../caddy/client.ts';
 import type { Db } from '../db/db.ts';
 
+/** How often routes are pushed to Caddy, so a hostname or port change reaches it within this long. */
+export const ROUTE_SYNC_INTERVAL_MS = 10_000;
+
 /**
  * Keeps Caddy's routes equal to the database. Runs on boot and then on a
  * timer, so a restarted Caddy (which comes back with only its base config) is
@@ -35,7 +38,7 @@ export class RouteSync {
     return changed;
   }
 
-  start(intervalMs = 10_000): void {
+  start(intervalMs = ROUTE_SYNC_INTERVAL_MS): void {
     const tick = async () => {
       try {
         await this.reconcile();

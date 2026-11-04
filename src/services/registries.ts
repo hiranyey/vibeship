@@ -126,16 +126,27 @@ export class RegistryService {
    */
   authFor(imageRef: string, registryId: number | null): RegistryAuth | null {
     const { host } = parseImageRef(imageRef);
-    const rows = registryId != null
-      ? this.#db.all<RegistryRow>('SELECT * FROM registries WHERE id = ?', registryId)
-      : this.#db.all<RegistryRow>('SELECT * FROM registries');
-    const row = rows.find((r) => registryId != null || registryHost(r.url) === host);
+    const row = this.#match(imageRef, registryId);
     if (!row?.username || !row.token_encrypted) return null;
     return {
       host: host ?? 'https://index.docker.io/v1/',
       username: row.username,
       password: this.#box.open(row.token_encrypted, `registry:${row.id}`),
     };
+  }
+
+  /** The registry `authFor` would use for `imageRef`, without its token; null when none matches. */
+  matchFor(imageRef: string, registryId: number | null): Registry | null {
+    const row = this.#match(imageRef, registryId);
+    return row ? this.#view(row) : null;
+  }
+
+  #match(imageRef: string, registryId: number | null): RegistryRow | undefined {
+    const { host } = parseImageRef(imageRef);
+    const rows = registryId != null
+      ? this.#db.all<RegistryRow>('SELECT * FROM registries WHERE id = ?', registryId)
+      : this.#db.all<RegistryRow>('SELECT * FROM registries');
+    return rows.find((r) => registryId != null || registryHost(r.url) === host);
   }
 
   /** Credentials for every registry that has them, for `docker compose pull`. */

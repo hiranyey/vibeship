@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { join } from 'node:path';
 import { sha256Hex } from '../crypto/tokens.ts';
 import type { Db } from '../db/db.ts';
+import { COMPOSE_FILE, DATA_DIR, ENV_FILE } from './layout.ts';
 
 export type RenderedFile = { path: string; content: string; mode: number };
 
@@ -28,7 +29,7 @@ export class ProjectFiles {
 
   write(projectId: number, projectName: string, files: RenderedFile[]): void {
     const dir = this.dir(projectName);
-    mkdirSync(join(dir, 'data'), { recursive: true });
+    mkdirSync(join(dir, DATA_DIR), { recursive: true });
     for (const f of files) {
       const target = join(dir, f.path);
       const tmp = `${target}.tmp`;
@@ -74,6 +75,6 @@ export class ProjectFiles {
       rmSync(dir, { recursive: true, force: true });
       return;
     }
-    for (const f of ['compose.yaml', '.env']) rmSync(join(dir, f), { force: true });
+    for (const f of [COMPOSE_FILE, ENV_FILE]) rmSync(join(dir, f), { force: true });
   }
 }

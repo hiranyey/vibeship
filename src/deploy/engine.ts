@@ -8,7 +8,8 @@ import type { ComposeVersionWithYaml, Project, ProjectService } from '../service
 import type { RegistryService } from '../services/registries.ts';
 import type { SettingsService } from '../services/settings.ts';
 import type { ProjectFiles, RenderedFile } from './files.ts';
-import { type HealthTiming, type HttpProbe, waitHealthy } from './health.ts';
+import { HEALTH_POLL_MS, HEALTH_STABLE_MS, type HealthTiming, type HttpProbe, healthUrl, waitHealthy } from './health.ts';
+import { COMPOSE_FILE, ENV_FILE, ENV_FILE_MODE } from './layout.ts';
 import type { DeployLogs } from './logs.ts';
 import { renderEnvFile, renderImageCompose } from './render.ts';
 
@@ -162,7 +163,7 @@ export class DeployEngine {
   }
 
   #envFile(project: Project): RenderedFile {
-    return { path: '.env', content: renderEnvFile(this.#d.env.resolve(project.id)), mode: 0o600 };
+    return { path: ENV_FILE, content: renderEnvFile(this.#d.env.resolve(project.id)), mode: ENV_FILE_MODE };
   }
 
   #imageRelease(project: Project, digest: string): Release {
@@ -172,7 +173,7 @@ export class DeployEngine {
       label: digest,
       files: [
         {
-          path: 'compose.yaml',
+          path: COMPOSE_FILE,
           content: renderImageCompose({ name: project.name, imageRef: image.imageRef, digest, memLimit: image.memLimit }),
           mode: 0o644,
         },
@@ -191,7 +192,7 @@ export class DeployEngine {
     return {
       key: `compose:${version.id}`,
       label: `compose version ${version.version}`,
-      files: [{ path: 'compose.yaml', content: yaml, mode: 0o644 }, this.#envFile(project)],
+      files: [{ path: COMPOSE_FILE, content: yaml, mode: 0o644 }, this.#envFile(project)],
       container: composeRoutedContainer(project.name),
       port: version.port,
       healthPath: version.healthPath,
@@ -262,8 +263,8 @@ export class DeployEngine {
       probe: this.#d.probe,
       container: release.container,
       // Vibeship shares the `web` network, so it reaches the app the same way Caddy does.
-      url: release.healthPath ? `http://${project.name}:${release.port}${release.healthPath}` : null,
-      timing: { timeoutMs, pollMs: this.#d.timing?.pollMs ?? 1000, stableMs: this.#d.timing?.stableMs ?? 5000 },
+      url: release.healthPath ? healthUrl(project.name, release.port, release.healthPath) : null,
+      timing: { timeoutMs, pollMs: this.#d.timing?.pollMs ?? HEALTH_POLL_MS, stableMs: this.#d.timing?.stableMs ?? HEALTH_STABLE_MS },
       log: system,
     });
   }

@@ -8,6 +8,9 @@ import type { Services } from '../services/index.ts';
 import { parseInput } from '../services/validate.ts';
 import type { AppEnv } from './auth.ts';
 
+/** The largest webhook request body accepted. */
+export const WEBHOOK_BODY_LIMIT_BYTES = 16 * 1024;
+
 export const WebhookInput = z.object({
   digest: Digest,
   /**

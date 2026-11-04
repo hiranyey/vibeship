@@ -8,18 +8,12 @@ import type { TokenScope } from '../schemas.ts';
 import type { Services } from '../services/index.ts';
 import type { Project } from '../services/projects.ts';
 import { scopeCovers } from '../services/tokens.ts';
+import { guideContext, renderDeployGuide, serverInstructions, shipNewAppPrompt, snapshotProject } from './guide.ts';
 
-const INSTRUCTIONS = `Vibeship deploys apps on one server, each at its own hostname behind Caddy.
+type Deps = { services: Services; principal: Principal; publicUrl: string; baseDomain: string };
 
-Projects are either "image" (a container image from a registry, deployed by digest) or "compose" (a docker compose file you write, checked against an allowlist: no privileged settings, ports only on 127.0.0.1, bind mounts only of ./data).
-
-Typical flow: create_project, set_env if the app needs configuration, then deploy. deploy returns a deploy id at once; follow it with get_deploy_logs (pass afterSeq to read only new lines) until its status is healthy or failed. A failed deploy never stays live: the last healthy version is brought back. To debug, read get_deploy_logs, get_status and get_container_logs, fix the cause (update_project, update_compose or set_env) and deploy again.
-
-Secret env values are write-only: you can set them, but no tool returns them.
-
-For CI-driven deploys of an image project, rotate_webhook (admin) returns a webhook URL once; CI posts the pushed image's digest to it.`;
-
-type Deps = { services: Services; principal: Principal; publicUrl: string };
+/** The general deploy guide as an MCP resource. */
+export const GUIDE_URI = 'vibeship://guide';
 
 /** A tool result as pretty JSON text. */
 function json(value: unknown): CallToolResult {
@@ -39,8 +33,8 @@ const write: ToolAnnotations = { readOnlyHint: false, destructiveHint: false, op
  * may use. Every tool calls the same service layer as the HTTP API, and its
  * changes are audited under the token.
  */
-export function createMcpServer({ services: s, principal, publicUrl }: Deps): McpServer {
-  const server = new McpServer({ name: 'vibeship', version: '0.1.0' }, { instructions: INSTRUCTIONS });
+export function createMcpServer({ services: s, principal, publicUrl, baseDomain }: Deps): McpServer {
+  const server = new McpServer({ name: 'vibeship', version: '0.1.0' }, { instructions: serverInstructions(baseDomain) });
   const ctx = principal.ctx;
 
   const find = (ref: string): Project => (/^\d+$/.test(ref) ? s.projects.get(Number(ref)) : s.projects.getByName(ref));
@@ -51,13 +45,15 @@ export function createMcpServer({ services: s, principal, publicUrl }: Deps): Mc
     scope: TokenScope,
     config: { description: string; inputSchema: Shape; annotations: ToolAnnotations },
     run: (args: z.infer<z.ZodObject<Shape>>) => unknown,
+    format: 'json' | 'markdown' = 'json',
   ): void {
     if (!scopeCovers(principal.scope, scope)) return;
     server.registerTool(name, config, (async (args: z.infer<z.ZodObject<Shape>>) => {
       // Listing already hides it; this keeps the check next to the action.
       if (!scopeCovers(principal.scope, scope)) return error(`${name} needs a ${scope} token`);
       try {
-        return json(await run(args));
+        const result = await run(args);
+        return format === 'markdown' ? { content: [{ type: 'text', text: String(result) }] } : json(result);
       } catch (err) {
         if (err instanceof AppError) return error(`${err.code}: ${err.message}`);
         console.error(`MCP tool ${name} failed`, err);
@@ -150,6 +146,38 @@ export function createMcpServer({ services: s, principal, publicUrl }: Deps): Mc
     await s.docker.containerLogs(container, { tail: tail ?? 200, follow: false }, (stream, line) => lines.push({ stream, line }));
     return { container, lines };
   });
+
+  tool('get_deploy_guide', 'read', {
+    description: 'How to ship an app to Vibeship, as markdown: image and registry conventions, persistent data, env vars and secrets, networking, health checks and rollback, the compose allowlist, a complete GitHub Actions workflow for the webhook, and troubleshooting with the exact error messages. Without a project it is the general guide (optionally for one kind); with a project it fills in that project\'s real values (image, hostname, port, health path, data mount, env key names, whether a webhook exists, last deploy). It never contains secret values, webhook URLs or tokens. Read it before creating or shipping a project.',
+    inputSchema: {
+      project: project.optional(),
+      kind: z.enum(['image', 'compose']).optional().describe('Only the parts for this kind of project; ignored when project is given'),
+    },
+    annotations: read,
+  }, ({ project: ref, kind }) => renderDeployGuide({
+    ctx: guideContext(s, baseDomain),
+    kind,
+    project: ref === undefined ? undefined : snapshotProject(s, find(ref)),
+  }), 'markdown');
+
+  // Resources and prompts are read-only, so every token gets them.
+
+  server.registerResource('deploy-guide', GUIDE_URI, {
+    title: 'Vibeship deploy guide',
+    description: 'The general deploy guide, for both kinds of project; get_deploy_guide fills it in for one project.',
+    mimeType: 'text/markdown',
+  }, (uri) => ({ contents: [{ uri: uri.href, mimeType: 'text/markdown', text: renderDeployGuide({ ctx: guideContext(s, baseDomain) }) }] }));
+
+  server.registerPrompt('ship_new_app', {
+    title: 'Ship a new app',
+    description: 'Walks through shipping a new app in the right order: read the guide, create_project, set_env, rotate_webhook, the first CI push, then verify.',
+    argsSchema: {
+      project: z.string().describe('The new project\'s name: a lowercase slug'),
+      kind: z.enum(['image', 'compose']).optional().describe('Default image'),
+    },
+  }, ({ project: name, kind }) => ({
+    messages: [{ role: 'user', content: { type: 'text', text: shipNewAppPrompt(name, kind ?? 'image', baseDomain) } }],
+  }));
 
   // Deploy
 

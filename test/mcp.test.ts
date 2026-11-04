@@ -39,7 +39,7 @@ function harness(t: TestContext) {
   return { ...s, app, agent };
 }
 
-const READ_TOOLS = ['get_container_logs', 'get_deploy_logs', 'get_project', 'get_status', 'list_deploys', 'list_projects', 'list_registries'];
+const READ_TOOLS = ['get_container_logs', 'get_deploy_guide', 'get_deploy_logs', 'get_project', 'get_status', 'list_deploys', 'list_projects', 'list_registries'];
 const DEPLOY_TOOLS = ['create_project', 'deploy', 'restart', 'set_env', 'start', 'stop', 'update_compose', 'update_project'];
 
 test('/mcp takes only bearer API tokens, over POST', async (t) => {
@@ -223,4 +223,130 @@ test('delete_project is admin only, and errors come back as tool errors', async 
   await call('create_project', { kind: 'image', name: 'hello', imageRef: REF, containerPort: 8080 });
   assert.deepEqual(await call('delete_project', { project: 'hello' }), { deleted: 'hello', dataDeleted: false });
   assert.deepEqual(await call('list_projects'), []);
+});
+
+test('initialize returns the short contract, pointing to get_deploy_guide', async (t) => {
+  const h = harness(t);
+  const { client } = await h.agent('read');
+  const instructions = client.getInstructions()!;
+  assert.ok(instructions.split('\n').length <= 40, 'instructions stay under 40 lines');
+  for (const part of [
+    'api.repoflow.io/hiranyeyg-6713/vibes/<project>', ':latest and :<git sha>', '{"digest":"sha256:<64 hex>"',
+    'create_project', 'rotate_webhook', 'WEBHOOK_URL', 'list_deploys', 'get_status', 'get_deploy_guide', '<project>.localhost',
+  ]) assert.ok(instructions.includes(part), `instructions mention ${part}`);
+  assert.ok(instructions.indexOf('create_project') < instructions.indexOf('rotate_webhook'));
+  assert.ok(instructions.indexOf('rotate_webhook') < instructions.indexOf('list_deploys'));
+});
+
+const SECTIONS = ['## Image and registry', '## Persistent data', '## Env vars and secrets', '## Networking', '## Health checks', '## Webhook and CI', '## Troubleshooting'];
+
+test('get_deploy_guide renders the general guide, for each kind, with a read token', async (t) => {
+  const h = harness(t);
+  const { client } = await h.agent('read');
+  const guide = async (args: Record<string, unknown>) => {
+    const r = await client.callTool({ name: 'get_deploy_guide', arguments: args }) as { content: Array<{ text: string }>; isError?: boolean };
+    assert.ok(!r.isError, r.content[0]?.text ?? "tool error");
+    return r.content[0]!.text;
+  };
+
+  const all = await guide({});
+  for (const s of [...SECTIONS, '## Compose projects']) assert.ok(all.includes(s), `general guide has ${s}`);
+  assert.doesNotMatch(all, /## This project/);
+
+  const image = await guide({ kind: 'image' });
+  for (const s of SECTIONS) assert.ok(image.includes(s), `image guide has ${s}`);
+  assert.doesNotMatch(image, /## Compose projects/);
+  assert.match(image, /secrets\.REPOFLOW_USERNAME/);
+  assert.match(image, /secrets\.REPOFLOW_PASSWORD/);
+  assert.match(image, /secrets\.WEBHOOK_URL/);
+  assert.match(image, /curl -fsS --retry 3/);
+
+  const compose = await guide({ kind: 'compose' });
+  assert.match(compose, /## Compose projects/);
+  assert.match(compose, /only image projects have one/);
+  assert.doesNotMatch(compose, /secrets\.WEBHOOK_URL/);
+});
+
+test('get_deploy_guide fills in a project\'s real values', async (t) => {
+  const h = harness(t);
+  const digest = h.fakeDocker.push(REF, 'healthy');
+  const { call, client } = await h.agent('admin');
+  await call('create_project', { kind: 'image', name: 'hello', imageRef: REF, containerPort: 8080, healthPath: '/health' });
+  await call('set_env', { project: 'hello', set: { GREETING: { value: 'plain-value-xyz' }, API_KEY: { value: SECRET, secret: true } } });
+  await call('rotate_webhook', { project: 'hello' });
+  await call('deploy', { project: 'hello' });
+  await h.queue.idle();
+
+  const r = await client.callTool({ name: 'get_deploy_guide', arguments: { project: 'hello' } }) as { content: Array<{ text: string }> };
+  const text = r.content[0]!.text;
+  assert.match(text, /## This project: hello/);
+  for (const part of [
+    '`localhost:5050/library/hello:latest`', '`hello.localhost` (the default)', 'Port: `8080`', 'http://hello:8080/health',
+    `\`${h.stackRoot}/hello/data\` mounted at \`/data\``, '`API_KEY` (secret)', '`GREETING`', 'Webhook: exists', `Live digest: \`${digest}\``,
+    '`healthy`', 'IMAGE: localhost:5050/library/hello',
+  ]) assert.ok(text.includes(part), `project guide includes ${part}`);
+  assert.doesNotMatch(text, /plain-value-xyz/, 'not even plain env values are shown');
+
+  const compose = await call('create_project', { kind: 'compose', name: 'blog', composeYaml: 'services:\n  app:\n    image: nginx:1.29\n    volumes:\n      - ./data:/srv\n', routedService: 'app', port: 80 });
+  assert.ok(!('error' in compose && compose.error), JSON.stringify(compose));
+  const c = (await client.callTool({ name: 'get_deploy_guide', arguments: { project: 'blog', kind: 'image' } }) as { content: Array<{ text: string }> }).content[0]!.text;
+  assert.match(c, /^# Deploying blog \(compose project\) to Vibeship/);
+  assert.ok(c.includes('mounted by `app` at `/srv`'));
+  assert.ok(c.includes('blog-blog-1'));
+  assert.match(c, /Last deploy: none yet/);
+
+  assert.equal((await call('get_deploy_guide', { project: 'nope' })).error, 'not_found: Project "nope" not found');
+});
+
+test('the guide, resource and prompt never contain secrets, webhook URLs or tokens', async (t) => {
+  const h = harness(t);
+  h.fakeDocker.push(REF, 'healthy');
+  const REGISTRY_TOKEN = 'registry-t0ken-do-not-leak';
+  h.registries.create(h.ctx, { name: 'Local', url: 'localhost:5050', username: 'puller', token: REGISTRY_TOKEN });
+  const { client, call } = await h.agent('admin');
+  const { token: apiToken } = h.tokens.create(h.ctx, { name: 'other', scope: 'deploy' });
+  await call('create_project', { kind: 'image', name: 'hello', imageRef: REF, containerPort: 8080 });
+  await call('set_env', { project: 'hello', set: { API_KEY: { value: SECRET, secret: true }, PLAIN: { value: 'visible-plain-value' } } });
+  const { url } = await call<{ url: string }>('rotate_webhook', { project: 'hello' });
+  await call('deploy', { project: 'hello' });
+  await h.queue.idle();
+
+  const outputs: string[] = [];
+  for (const args of [{}, { kind: 'image' }, { kind: 'compose' }, { project: 'hello' }]) {
+    outputs.push(JSON.stringify(await client.callTool({ name: 'get_deploy_guide', arguments: args })));
+  }
+  outputs.push(JSON.stringify(await client.readResource({ uri: 'vibeship://guide' })));
+  outputs.push(JSON.stringify(await client.getPrompt({ name: 'ship_new_app', arguments: { project: 'hello' } })));
+  outputs.push(client.getInstructions()!);
+
+  const webhookToken = url.split('/').at(-1)!;
+  for (const out of outputs) {
+    for (const secret of [SECRET, 'visible-plain-value', webhookToken, url, REGISTRY_TOKEN, apiToken]) {
+      assert.ok(!out.includes(secret), `output leaks ${secret.slice(0, 12)}…`);
+    }
+    assert.doesNotMatch(out, /\/hooks\/deploy\/[A-Za-z0-9_-]{10,}/);
+  }
+  // The registry is reported by name and login state only.
+  assert.match(outputs[3]!, /`Local` \(id \d+, host `localhost:5050`, matched by host\), pulls with its login/);
+});
+
+test('every scope gets the guide resource and the ship_new_app prompt', async (t) => {
+  const h = harness(t);
+  const { client } = await h.agent('read');
+  assert.deepEqual((await client.listResources()).resources.map((r) => [r.uri, r.mimeType]), [['vibeship://guide', 'text/markdown']]);
+  const resource = await client.readResource({ uri: 'vibeship://guide' });
+  const text = (resource.contents[0] as { text: string }).text;
+  assert.match(text, /^# Deploying to Vibeship\n/);
+  assert.match(text, /## Compose projects/);
+
+  assert.deepEqual((await client.listPrompts()).prompts.map((p) => p.name), ['ship_new_app']);
+  const prompt = await client.getPrompt({ name: 'ship_new_app', arguments: { project: 'shop' } });
+  const steps = (prompt.messages[0]!.content as { text: string }).text;
+  const order = ['get_deploy_guide', 'create_project', 'set_env', 'rotate_webhook', 'Push to main', 'list_deploys', 'get_status'].map((x) => steps.indexOf(x));
+  assert.ok(order.every((i) => i >= 0), steps);
+  assert.deepEqual(order, [...order].sort((a, b) => a - b), 'steps come in the setup order');
+  assert.match(steps, /api\.repoflow\.io\/hiranyeyg-6713\/vibes\/shop:latest/);
+
+  const compose = await client.getPrompt({ name: 'ship_new_app', arguments: { project: 'shop', kind: 'compose' } });
+  assert.doesNotMatch((compose.messages[0]!.content as { text: string }).text, /rotate_webhook/);
 });

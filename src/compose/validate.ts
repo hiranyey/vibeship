@@ -1,4 +1,5 @@
 import { parseDocument } from 'yaml';
+import { DATA_DIR, ENV_FILE, WEB_NETWORK } from '../deploy/layout.ts';
 import { HEADER, toYaml, type Yaml } from '../deploy/render.ts';
 import { AppError } from '../errors.ts';
 
@@ -12,22 +13,38 @@ import { AppError } from '../errors.ts';
 
 type Obj = { [key: string]: Yaml };
 
-const SERVICE_KEYS = new Set([
+export const SERVICE_KEYS: ReadonlySet<string> = new Set([
   'image', 'command', 'entrypoint', 'environment', 'env_file', 'ports', 'volumes', 'depends_on',
   'healthcheck', 'restart', 'working_dir', 'user', 'labels', 'mem_limit', 'cpus', 'networks',
 ]);
-const TOP_KEYS = new Set(['services', 'volumes', 'networks']);
+export const TOP_KEYS: ReadonlySet<string> = new Set(['services', 'volumes', 'networks']);
 /** Accepted and dropped: `version` is obsolete, and `x-` blocks only hold YAML anchors, already resolved. */
-const IGNORED_TOP_KEY = (k: string) => k === 'version' || k.startsWith('x-');
+export const IGNORED_TOP_KEY = (k: string) => k === 'version' || k.startsWith('x-');
 
-const NAME = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/;
-const HEALTHCHECK_KEYS = new Set(['test', 'interval', 'timeout', 'retries', 'start_period', 'start_interval', 'disable']);
-const PORT_KEYS = new Set(['target', 'published', 'host_ip', 'protocol', 'name', 'app_protocol']);
-const VOLUME_KEYS = new Set(['type', 'source', 'target', 'read_only']);
-const DEPENDS_KEYS = new Set(['condition', 'restart', 'required']);
-const CONDITIONS = new Set(['service_started', 'service_healthy', 'service_completed_successfully']);
-const RESERVED_LABEL = /^(com\.docker\.|dev\.vibeship\.)/;
-const LOOPBACK = '127.0.0.1';
+export const NAME = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/;
+export const HEALTHCHECK_KEYS: ReadonlySet<string> = new Set(['test', 'interval', 'timeout', 'retries', 'start_period', 'start_interval', 'disable']);
+export const PORT_KEYS: ReadonlySet<string> = new Set(['target', 'published', 'host_ip', 'protocol', 'name', 'app_protocol']);
+export const VOLUME_KEYS: ReadonlySet<string> = new Set(['type', 'source', 'target', 'read_only']);
+export const DEPENDS_KEYS: ReadonlySet<string> = new Set(['condition', 'restart', 'required']);
+export const CONDITIONS: ReadonlySet<string> = new Set(['service_started', 'service_healthy', 'service_completed_successfully']);
+export const RESERVED_LABEL = /^(com\.docker\.|dev\.vibeship\.)/;
+/** The only host address a compose port may be published on. */
+export const LOOPBACK = '127.0.0.1';
+/** Keys a top-level named volume may have. */
+export const TOP_VOLUME_KEYS: ReadonlySet<string> = new Set(['labels']);
+/** Keys a top-level network may have. */
+export const TOP_NETWORK_KEYS: ReadonlySet<string> = new Set(['internal', 'labels']);
+/** Keys a service's entry under `networks` may have. */
+export const SERVICE_NETWORK_KEYS: ReadonlySet<string> = new Set(['aliases']);
+/** The only bind mount sources allowed: the project's data folder itself. */
+export const BIND_SOURCES: ReadonlySet<string> = new Set([`./${DATA_DIR}`, `./${DATA_DIR}/`]);
+/** The only env_file values allowed: the project's own .env. */
+export const ENV_FILES: ReadonlySet<string> = new Set([ENV_FILE, `./${ENV_FILE}`]);
+/** Keys in which `$` interpolation is refused, since compose resolves it after the check. */
+export const NO_INTERPOLATION_KEYS = ['ports', 'volumes', 'networks'] as const;
+export const RESTART_POLICY = /^(no|always|unless-stopped|on-failure(:\d+)?)$/;
+/** Aliases resolved per document; more is refused. */
+export const MAX_YAML_ALIASES = 100;
 const PORT_SPEC = '\\d{1,5}(?:-\\d{1,5})?';
 const SHORT_PORT = new RegExp(`^127\\.0\\.0\\.1:${PORT_SPEC}:${PORT_SPEC}(?:/(?:tcp|udp))?$`);
 
@@ -49,7 +66,7 @@ function obj(v: unknown, path: string): Obj {
   return v;
 }
 
-function onlyKeys(v: Obj, allowed: Set<string>, path: string, hint = 'is not allowed'): void {
+function onlyKeys(v: Obj, allowed: ReadonlySet<string>, path: string, hint = 'is not allowed'): void {
   for (const k of Object.keys(v)) {
     if (k === '<<') fail(`${path}.<<`, 'YAML merge keys are not supported; write the keys out, or use an anchor for a whole value');
     if (!allowed.has(k)) fail(`${path}.${k}`, hint);
@@ -81,7 +98,7 @@ export function parseComposeYaml(text: string): Obj {
   if (problem) fail('yaml', problem.message.split('\n')[0]!);
   let value: unknown;
   try {
-    value = doc.toJS({ maxAliasCount: 100 });
+    value = doc.toJS({ maxAliasCount: MAX_YAML_ALIASES });
   } catch (err) {
     fail('yaml', (err as Error).message);
   }
@@ -105,15 +122,15 @@ export function checkCompose(text: string, routedService: string): ComposeCheck 
     if (!NAME.test(name)) fail(`volumes.${name}`, 'is not a valid volume name');
     if (v === null) continue;
     // `name` and `external` would reach volumes outside this project; `driver` options can mount host paths.
-    onlyKeys(obj(v, `volumes.${name}`), new Set(['labels']), `volumes.${name}`, 'is not allowed; volumes are plain named volumes');
+    onlyKeys(obj(v, `volumes.${name}`), TOP_VOLUME_KEYS, `volumes.${name}`, 'is not allowed; volumes are plain named volumes');
   }
 
   const networks = top.networks == null ? {} : obj(top.networks, 'networks');
   for (const [name, v] of Object.entries(networks)) {
-    if (name === 'web') fail('networks.web', 'Vibeship attaches the routed service to web itself');
+    if (name === WEB_NETWORK) fail(`networks.${WEB_NETWORK}`, `Vibeship attaches the routed service to ${WEB_NETWORK} itself`);
     if (!NAME.test(name)) fail(`networks.${name}`, 'is not a valid network name');
     if (v === null) continue;
-    onlyKeys(obj(v, `networks.${name}`), new Set(['internal', 'labels']), `networks.${name}`, 'is not allowed; networks are private to the project');
+    onlyKeys(obj(v, `networks.${name}`), TOP_NETWORK_KEYS, `networks.${name}`, 'is not allowed; networks are private to the project');
   }
 
   const services = obj(top.services, 'services');
@@ -152,7 +169,7 @@ function checkService(name: string, s: Obj, ctx: { services: Obj; volumes: Obj; 
     // Only the project's own .env, which Vibeship writes; any other path could read host files.
     const files = Array.isArray(s.env_file) ? s.env_file : [s.env_file];
     files.forEach((f, i) => {
-      if (f !== '.env' && f !== './.env') fail(`${at}.env_file${Array.isArray(s.env_file) ? `[${i}]` : ''}`, 'only .env (the project\'s env vars) is allowed');
+      if (typeof f !== 'string' || !ENV_FILES.has(f)) fail(`${at}.env_file${Array.isArray(s.env_file) ? `[${i}]` : ''}`, 'only .env (the project\'s env vars) is allowed');
     });
   }
 
@@ -196,7 +213,7 @@ function checkService(name: string, s: Obj, ctx: { services: Obj; volumes: Obj; 
 
   if (s.healthcheck !== undefined) onlyKeys(obj(s.healthcheck, `${at}.healthcheck`), HEALTHCHECK_KEYS, `${at}.healthcheck`);
 
-  if (s.restart !== undefined && !/^(no|always|unless-stopped|on-failure(:\d+)?)$/.test(String(s.restart))) {
+  if (s.restart !== undefined && !RESTART_POLICY.test(String(s.restart))) {
     fail(`${at}.restart`, 'must be no, always, unless-stopped or on-failure[:N]');
   }
 
@@ -215,14 +232,14 @@ function checkService(name: string, s: Obj, ctx: { services: Obj; volumes: Obj; 
     const nets = s.networks;
     const names = Array.isArray(nets) ? nets : Object.keys(obj(nets, `${at}.networks`));
     names.forEach((n, i) => {
-      if (n === 'web') fail(`${at}.networks`, 'web is added by Vibeship, and only to the routed service');
+      if (n === WEB_NETWORK) fail(`${at}.networks`, `${WEB_NETWORK} is added by Vibeship, and only to the routed service`);
       if (typeof n !== 'string' || (n !== 'default' && !(n in ctx.networks))) fail(`${at}.networks[${i}]`, `${String(n)} is not declared under networks`);
     });
     if (isObj(nets)) {
       for (const [n, cfg] of Object.entries(nets)) {
         if (cfg === null) continue;
         const c = obj(cfg, `${at}.networks.${n}`);
-        onlyKeys(c, new Set(['aliases']), `${at}.networks.${n}`);
+        onlyKeys(c, SERVICE_NETWORK_KEYS, `${at}.networks.${n}`);
         if (c.aliases !== undefined && !(Array.isArray(c.aliases) && c.aliases.every((a) => typeof a === 'string' && NAME.test(a)))) {
           fail(`${at}.networks.${n}.aliases`, 'must be a list of names');
         }
@@ -240,7 +257,7 @@ function checkVolume(v: unknown, path: string, declared: Obj): void {
   const bindHint = 'bind mounts may only use ./data (the project\'s data folder); use a named volume for anything else';
   const checkSource = (source: string, at: string) => {
     if (/^[./~]/.test(source)) {
-      if (source !== './data' && source !== './data/') fail(at, bindHint);
+      if (!BIND_SOURCES.has(source)) fail(at, bindHint);
     } else if (!(source in declared)) {
       fail(at, NAME.test(source) ? `volume ${source} is not declared under volumes` : bindHint);
     }
@@ -294,8 +311,7 @@ export function renderComposeProject(check: ComposeCheck, project: string): stri
   const services: Obj = {};
   for (const [name, original] of Object.entries(file.services)) {
     const s: Obj = { ...original };
-    if (Array.isArray(s.env_file)) s.env_file = ['.env'];
-    else if (s.env_file !== undefined) s.env_file = ['.env'];
+    if (s.env_file !== undefined) s.env_file = [ENV_FILE];
 
     if (s.depends_on !== undefined) {
       s.depends_on = Array.isArray(s.depends_on)
@@ -320,7 +336,7 @@ export function renderComposeProject(check: ComposeCheck, project: string): stri
         const aliases = ((cfg as Obj | null)?.aliases as string[] | undefined) ?? [];
         networks[n] = { aliases: name === project ? aliases : [...new Set([...aliases, name])] };
       }
-      networks.web = { aliases: [project] };
+      networks[WEB_NETWORK] = { aliases: [project] };
       s.networks = networks;
     }
     services[rename(name)] = s;
@@ -330,7 +346,7 @@ export function renderComposeProject(check: ComposeCheck, project: string): stri
     name: project,
     services,
     ...(Object.keys(file.volumes).length > 0 ? { volumes: file.volumes } : {}),
-    networks: { ...file.networks, web: { external: true } },
+    networks: { ...file.networks, [WEB_NETWORK]: { external: true } },
   });
 }
 

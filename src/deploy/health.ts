@@ -15,6 +15,21 @@ export const fetchProbe: HttpProbe = async (url, timeoutMs) => {
   }
 };
 
+/** How often a deploy checks the container and the health path. */
+export const HEALTH_POLL_MS = 1000;
+/** Without a health path or HEALTHCHECK, how long the container must stay up. */
+export const HEALTH_STABLE_MS = 5000;
+/** The longest a single health request may take. */
+export const PROBE_TIMEOUT_MS = 3000;
+
+/**
+ * The health URL. Vibeship shares the `web` network, so it reaches the app
+ * the same way Caddy does: by the `<project>` alias, not through localhost.
+ */
+export function healthUrl(project: string, port: number | string, healthPath: string): string {
+  return `http://${project}:${port}${healthPath}`;
+}
+
 export type HealthTiming = {
   timeoutMs: number;
   /** How often to check the container and the health path. */
@@ -63,7 +78,7 @@ export async function waitHealthy(opts: {
       if (state.status === 'running') {
         runningSince ??= Date.now();
         if (url) {
-          const r = await probe(url, Math.min(3000, timing.timeoutMs));
+          const r = await probe(url, Math.min(PROBE_TIMEOUT_MS, timing.timeoutMs));
           if (r.ok) return log(`Healthy: ${url} answered ${r.detail}`);
           lastProblem = `${url} answered ${r.detail}`;
         } else if (state.health === 'healthy') {

@@ -4,13 +4,16 @@ import type { Db } from '../db/db.ts';
 import type { AuditLog } from './audit.ts';
 import { parseInput } from './validate.ts';
 
+/** The deploy health check timeout: an admin setting, in seconds. */
+export const HEALTH_TIMEOUT_SECONDS = { default: 60, min: 5, max: 900 } as const;
+
 const Schemas = {
-  health_timeout_seconds: z.coerce.number().int().min(5).max(900),
+  health_timeout_seconds: z.coerce.number().int().min(HEALTH_TIMEOUT_SECONDS.min).max(HEALTH_TIMEOUT_SECONDS.max),
 };
 export type SettingKey = keyof typeof Schemas;
 export type Settings = { [K in SettingKey]: z.output<(typeof Schemas)[K]> };
 
-const defaults: Settings = { health_timeout_seconds: 60 };
+const defaults: Settings = { health_timeout_seconds: HEALTH_TIMEOUT_SECONDS.default };
 
 export class SettingsService {
   readonly #db: Db;
