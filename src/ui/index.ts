@@ -17,12 +17,20 @@ export function isUiPath(path: string): boolean {
 }
 
 const brand = (file: string) => new URL(`../../brand/${file}`, import.meta.url);
+const font = (file: string) => ({ file: new URL(`../../fonts/${file}`, import.meta.url), type: 'font/woff2' });
 
 const STATIC: Record<string, { file: URL; type: string }> = {
   'vibeship.css': { file: new URL('../../vibeship.css', import.meta.url), type: 'text/css; charset=utf-8' },
   'ui.js': { file: new URL('./static/ui.js', import.meta.url), type: 'text/javascript; charset=utf-8' },
   'vibeship-mark.svg': { file: brand('vibeship-mark.svg'), type: 'image/svg+xml' },
 };
+
+/** Self-hosted web fonts from `fonts/`, referenced by `vibeship.css` as `fonts/<file>`. */
+const FONTS: Record<string, { file: URL; type: string }> = Object.fromEntries(
+  ['newsreader', 'source-serif-4', 'jetbrains-mono'].flatMap((name) =>
+    ['latin', 'latin-ext'].map((subset) => [`${name}-${subset}.woff2`, font(`${name}-${subset}.woff2`)]),
+  ),
+);
 
 /** Icons browsers and the web manifest ask for at the site root, from `brand/`. */
 const ROOT_ICONS: Record<string, { file: URL; type: string }> = {
@@ -56,7 +64,9 @@ export function uiRoutes(deps: { config: Config; services: Services }): { app: H
     c.header('X-Content-Type-Options', 'nosniff');
     return c.body(new Uint8Array(asset.body));
   };
+  const fonts = load(FONTS);
   app.get('/static/:file', (c) => send(c, assets[c.req.param('file')]));
+  app.get('/static/fonts/:file', (c) => send(c, fonts[c.req.param('file')]));
   for (const [name, asset] of Object.entries(load(ROOT_ICONS))) app.get(`/${name}`, (c) => send(c, asset));
 
   const guard: MiddlewareHandler<AppEnv> = async (c, next) => {

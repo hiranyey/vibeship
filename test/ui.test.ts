@@ -93,6 +93,20 @@ test('static assets are served', async (t) => {
   assert.equal((await b.app.request('/static/nope.js')).status, 404);
 });
 
+test('self-hosted fonts are served for every @font-face in vibeship.css', async (t) => {
+  const b = browser(t);
+  const css = await (await b.app.request('/static/vibeship.css')).text();
+  const files = [...css.matchAll(/url\("fonts\/([^"]+)"\)/g)].map((m) => m[1]!);
+  assert.equal(files.length, 6);
+  for (const file of files) {
+    const res = await b.app.request(`/static/fonts/${file}`);
+    assert.equal(res.status, 200, file);
+    assert.equal(res.headers.get('content-type'), 'font/woff2');
+    assert.equal(new TextDecoder().decode((await res.arrayBuffer()).slice(0, 4)), 'wOF2', file);
+  }
+  assert.equal((await b.app.request('/static/fonts/nope.woff2')).status, 404);
+});
+
 test('the wizard creates an image project with env, deploys it, and shows the live deploy', async (t) => {
   const b = browser(t);
   b.fakeDocker.push(REF, 'healthy');
