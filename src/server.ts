@@ -21,6 +21,7 @@ const services = createServices({ db, config });
 await recoverInterruptedDeploys({ db, docker: services.docker, audit: services.audit, files: services.files });
 services.queue.start();
 services.routes.start();
+services.host.start();
 
 const app = createApp({ config, db, services });
 
@@ -33,6 +34,7 @@ function shutdown(signal: string) {
   // A deploy still running is marked failed and recovered on the next boot.
   services.queue.stop();
   services.routes.stop();
+  services.host.stop();
   server.close(() => {
     db.close();
     process.exit(0);

@@ -103,6 +103,16 @@ export function createMcpServer({ services: s, principal, publicUrl, baseDomain 
     annotations: read,
   }, ({ project: ref }) => s.deploys.status(find(ref).id));
 
+  tool('get_resource_usage', 'read', {
+    description: 'CPU and memory. Without project: the VM (cores, CPU %, memory used/total, load) and each project\'s share, busiest first. With project: that project\'s containers. cpuPercent is percent of one core (200 = two cores); cpuShare and memShare are percent of the whole VM.',
+    inputSchema: { project: project.optional() },
+    annotations: read,
+  }, async ({ project: ref }) => {
+    if (ref) return s.metrics.project(find(ref).id);
+    const { history: _history, ...rest } = await s.metrics.overview();
+    return rest;
+  });
+
   tool('list_deploys', 'read', {
     description: 'Recent deploys of a project, newest first, with status and failure reason.',
     inputSchema: { project, limit: z.number().int().min(1).max(100).optional().describe('How many, default 10') },

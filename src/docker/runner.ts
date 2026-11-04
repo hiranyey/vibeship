@@ -25,6 +25,23 @@ export type ContainerSummary = {
   image: string;
 };
 
+/** A running container's resource use, as `docker stats` reports it at one moment. */
+export type ContainerStats = {
+  name: string;
+  /** The compose project it belongs to (the Vibeship project name), or null for containers outside compose. */
+  project: string | null;
+  /** The compose service, or null outside compose. */
+  service: string | null;
+  /** Percent of one CPU core, so 250 means two and a half cores busy. */
+  cpuPercent: number;
+  memBytes: number;
+  /** The container's memory limit, or the machine's memory when it has none. */
+  memLimitBytes: number;
+  netRxBytes: number;
+  netTxBytes: number;
+  pids: number;
+};
+
 export type LifecycleAction = 'stop' | 'start' | 'restart';
 
 export type ComposeTarget = {
@@ -60,4 +77,6 @@ export interface DockerRunner {
   projectContainers(project: string): Promise<ContainerSummary[]>;
   /** Null when no container by that name exists. */
   inspectContainer(name: string): Promise<ContainerState | null>;
+  /** Resource use of every running container on the machine. */
+  containerStats(): Promise<ContainerStats[]>;
 }

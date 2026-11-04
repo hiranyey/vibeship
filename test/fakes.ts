@@ -4,8 +4,9 @@ import { join } from 'node:path';
 import { parse } from 'yaml';
 import type { CaddyApi, RouteSpec } from '../src/caddy/client.ts';
 import type { HttpProbe } from '../src/deploy/health.ts';
+import type { CpuTimes, HostSource } from '../src/system/host.ts';
 import { parseImageRef } from '../src/docker/image-ref.ts';
-import type { ComposeTarget, ContainerState, ContainerSummary, DockerRunner, LifecycleAction, LineSink, RegistryAuth } from '../src/docker/runner.ts';
+import type { ComposeTarget, ContainerState, ContainerStats, ContainerSummary, DockerRunner, LifecycleAction, LineSink, RegistryAuth } from '../src/docker/runner.ts';
 
 /** How a fake image behaves once started. */
 export type Behavior = 'healthy' | 'crash' | 'unhealthy' | 'never-starts';
@@ -148,6 +149,31 @@ export class FakeDocker implements DockerRunner {
     }
   }
 
+  /** Resource use per container name; running containers not listed here use 1% CPU and 64 MiB. */
+  readonly stats = new Map<string, { cpuPercent: number; memBytes: number }>();
+  /** Set to make `containerStats` fail with this message. */
+  statsError: string | null = null;
+
+  async containerStats(): Promise<ContainerStats[]> {
+    if (this.statsError) throw new Error(this.statsError);
+    return [...this.containers.entries()]
+      .filter(([, c]) => !c.stopped)
+      .map(([name, c]) => {
+        const s = this.stats.get(name) ?? { cpuPercent: 1, memBytes: 64 * 1024 ** 2 };
+        return {
+          name,
+          project: c.project,
+          service: name === c.project ? c.project : name.slice(c.project.length + 1).replace(/-\d+$/, ''),
+          ...s,
+          memLimitBytes: 8 * 1024 ** 3,
+          netRxBytes: 1000,
+          netTxBytes: 2000,
+          pids: 3,
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
   /** The digest the named container is running, if any. */
   runningDigest(name: string): string | undefined {
     const image = this.containers.get(name)?.image;
@@ -161,6 +187,25 @@ export class FakeDocker implements DockerRunner {
     if (!c) return { ok: false, detail: 'ENOTFOUND' };
     return c.behavior === 'healthy' ? { ok: true, detail: 'HTTP 200' } : { ok: false, detail: 'HTTP 500' };
   };
+}
+
+/** A VM whose CPU and memory a test sets: every reading advances the CPU counters at `cpuPercent`. */
+export class FakeHost implements HostSource {
+  cpuPercent = 25;
+  coreCount = 4;
+  totalBytes = 8 * 1024 ** 3;
+  availableBytes = 6 * 1024 ** 3;
+  settleMs = 0;
+  #times: CpuTimes = { idle: 0, total: 0 };
+
+  cpuTimes(): CpuTimes {
+    this.#times = { idle: this.#times.idle + 1000 * (1 - this.cpuPercent / 100), total: this.#times.total + 1000 };
+    return this.#times;
+  }
+  memory() { return { totalBytes: this.totalBytes, availableBytes: this.availableBytes }; }
+  cores() { return this.coreCount; }
+  load(): [number, number, number] { return [0.5, 0.4, 0.3]; }
+  uptimeSeconds() { return 3600; }
 }
 
 export class FakeCaddy implements CaddyApi {

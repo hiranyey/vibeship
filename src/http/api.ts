@@ -99,6 +99,8 @@ export function apiRoutes(deps: { config: Config; services: Services }): Hono<Ap
   });
   app.get('/projects/:id/drift', read, (c) => c.json(s.deploys.drift(project(c).id)));
   app.get('/projects/:id/status', read, async (c) => c.json(await s.deploys.status(project(c).id)));
+  app.get('/projects/:id/metrics', read, async (c) => c.json(await s.metrics.project(project(c).id)));
+  app.get('/metrics', read, async (c) => c.json(await s.metrics.overview()));
   for (const action of ['stop', 'start', 'restart'] as const) {
     app.post(`/projects/:id/${action}`, deploy, async (c) => c.json(await s.deploys.lifecycle(principal(c).ctx, project(c).id, action)));
   }

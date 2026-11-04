@@ -8,7 +8,7 @@ import { Db } from '../src/db/db.ts';
 import type { Lchown } from '../src/deploy/files.ts';
 import { migrate } from '../src/db/migrate.ts';
 import { createServices } from '../src/services/index.ts';
-import { FakeCaddy, FakeDocker } from './fakes.ts';
+import { FakeCaddy, FakeDocker, FakeHost } from './fakes.ts';
 
 export const BASE_DOMAIN = 'localhost';
 
@@ -29,6 +29,7 @@ export function setup(t?: TestContext, opts: { lchown?: Lchown } = {}) {
   t?.after(() => rmSync(stackRoot, { recursive: true, force: true }));
   const docker = new FakeDocker();
   const caddy = new FakeCaddy();
+  const host = new FakeHost();
   const services = createServices({
     db,
     config: { baseDomain: BASE_DOMAIN, masterKey: randomBytes(32), stackRoot, caddyAdminUrl: 'http://caddy-api:2019' },
@@ -37,8 +38,9 @@ export function setup(t?: TestContext, opts: { lchown?: Lchown } = {}) {
     probe: docker.probe,
     timing: FAST_TIMING,
     lchown: opts.lchown,
+    hostSource: host,
   });
-  return { ...services, db, ctx, userId, stackRoot, fakeDocker: docker, fakeCaddy: caddy };
+  return { ...services, db, ctx, userId, stackRoot, fakeDocker: docker, fakeCaddy: caddy, fakeHost: host };
 }
 
 export function tempDir(t: TestContext): string {

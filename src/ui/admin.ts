@@ -6,7 +6,7 @@ import type { AuditEntry } from '../services/audit.ts';
 import type { Registry } from '../services/registries.ts';
 import type { Services } from '../services/index.ts';
 import { readForm } from './projects.ts';
-import { ago, alert, emptyRow, field, type Html, pageHeader, postButton, shownOnce, type View } from './view.ts';
+import { ago, alert, copyButton, emptyRow, field, type Html, pageHeader, postButton, shownOnce, type View } from './view.ts';
 
 const PAGE = 50;
 
@@ -37,7 +37,10 @@ export function adminPages(deps: { services: Services; view: View }): Hono<AppEn
           <table class="table">
             <thead><tr><th>Name</th><th>Host</th><th>URL</th><th>Login</th><th></th></tr></thead>
             <tbody>${list.length === 0
-              ? emptyRow(5, 'No registries. Public images need none.')
+              ? emptyRow(5, html`<div class="empty-state">
+                  <div class="empty-title">No registries</div>
+                  <p>Public images need none. Add one below to pull private images with a read-only token.</p>
+                </div>`)
               : list.map((r) => html`<tr><td class="cell-name">${r.name}</td><td class="cell-mono">${r.host}</td><td class="cell-mono">${r.url}</td><td>${r.username ? html`<span class="mono">${r.username}</span> · token set` : 'anonymous'}</td><td class="cell-actions"><a class="btn btn-ghost btn-sm" href="/settings/registries/${r.id}">Edit</a></td></tr>`)}</tbody>
           </table>
         </div>
@@ -125,12 +128,18 @@ export function adminPages(deps: { services: Services; view: View }): Hono<AppEn
       crumbs: crumbs('API tokens'),
       body: html`${pageHeader('API tokens', html`For the HTTP API and MCP at <span class="mono">${view.publicUrl}/mcp</span>. read sees everything but secrets; deploy also creates, configures and deploys; admin also deletes and manages tokens.`)}
         ${extra.created ? shownOnce(`Token "${extra.created.name}"`, extra.created.token, 'Shown once. Copy it now; it cannot be read back.') : ''}
-        ${extra.created ? html`<p class="t-sm text-muted mt-0">For Claude Code: <code class="inline">claude mcp add --transport http vibeship ${view.publicUrl}/mcp --header "Authorization: Bearer ${extra.created.token}"</code></p>` : ''}
+        ${extra.created ? (() => {
+          const cmd = `claude mcp add --transport http vibeship ${view.publicUrl}/mcp --header "Authorization: Bearer ${extra.created.token}"`;
+          return html`<p class="t-sm text-muted mt-0">For Claude Code: <code class="inline">${cmd}</code>${copyButton(cmd, 'Copy the command')}</p>`;
+        })() : ''}
         <div class="table-wrap">
           <table class="table">
             <thead><tr><th>Name</th><th>Scope</th><th>Created</th><th>Last used</th><th>Expires</th><th>State</th><th></th></tr></thead>
             <tbody>${tokens.length === 0
-              ? emptyRow(7, 'No tokens.')
+              ? emptyRow(7, html`<div class="empty-state">
+                  <div class="empty-title">No API tokens yet</div>
+                  <p>A token lets Claude Code, another agent or CI talk to Vibeship over MCP or the HTTP API. Create one below; <em>deploy</em> scope suits most agents.</p>
+                </div>`)
               : tokens.map((t) => {
                 const expired = t.expiresAt !== null && Date.parse(t.expiresAt) <= Date.now();
                 const state = t.revokedAt ? 'revoked' : expired ? 'expired' : 'active';
@@ -204,7 +213,10 @@ export function adminPages(deps: { services: Services; view: View }): Hono<AppEn
           <table class="table">
             <thead><tr><th>When</th><th>Who</th><th>Action</th><th>Target</th><th>Details</th><th>IP</th></tr></thead>
             <tbody>${entries.length === 0
-              ? emptyRow(6, 'Nothing here.')
+              ? emptyRow(6, html`<div class="empty-state">
+                  <div class="empty-title">Nothing recorded yet</div>
+                  <p>Creating projects, deploying, changing env vars or tokens all show up here.</p>
+                </div>`)
               : entries.map((e) => html`<tr>
                 <td>${ago(e.ts)}</td>
                 <td>${who(e)}</td>

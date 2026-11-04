@@ -20,7 +20,7 @@ export function safeReturnTo(value: string | undefined): string {
 }
 
 /** A small standalone page in the app's style: a centred card, no navigation. */
-function page(c: Context<AppEnv>, opts: { title: string; host: string; status?: 200 | 400 | 403 | 502 | 503 }, body: unknown) {
+function page(c: Context<AppEnv>, opts: { title: string; host: string; status?: 200 | 400 | 403 | 502 | 503; heading?: boolean }, body: unknown) {
   c.header('Content-Security-Policy', CSP);
   c.header('X-Content-Type-Options', 'nosniff');
   c.header('Referrer-Policy', 'same-origin');
@@ -42,7 +42,7 @@ function page(c: Context<AppEnv>, opts: { title: string; host: string; status?: 
               <div class="brand-title">Vibeship</div>
             </div>
           </div>
-          <h1 class="auth-title">${opts.title}</h1>
+          ${opts.heading === false ? '' : html`<h1 class="auth-title">${opts.title}</h1>`}
           ${body}
         </main>
       </body>
@@ -69,7 +69,7 @@ export function authRoutes(deps: { config: Config; services: Services; oidc: Oid
     if (c.get('principal')?.kind === 'user') return c.redirect(returnTo, 302);
     if (!oidc) return notConfigured(c);
     const start = returnTo === '/' ? '/auth/start' : `/auth/start?returnTo=${encodeURIComponent(returnTo)}`;
-    return page(c, { title: 'Log in', host }, html`
+    return page(c, { title: 'Log in', host, heading: false }, html`
       <p class="text-muted mt-0">Sign in with your identity provider to manage projects and deploys.</p>
       <a class="btn btn-primary btn-lg auth-button" href="${start}">Log in with SSO</a>`);
   });

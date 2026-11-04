@@ -39,7 +39,7 @@ function harness(t: TestContext) {
   return { ...s, app, agent };
 }
 
-const READ_TOOLS = ['get_container_logs', 'get_deploy_guide', 'get_deploy_logs', 'get_project', 'get_status', 'list_deploys', 'list_projects', 'list_registries'];
+const READ_TOOLS = ['get_container_logs', 'get_deploy_guide', 'get_deploy_logs', 'get_project', 'get_resource_usage', 'get_status', 'list_deploys', 'list_projects', 'list_registries'];
 const DEPLOY_TOOLS = ['create_project', 'deploy', 'restart', 'set_env', 'start', 'stop', 'update_compose', 'update_project'];
 
 test('/mcp takes only bearer API tokens, over POST', async (t) => {

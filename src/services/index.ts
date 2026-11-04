@@ -10,9 +10,11 @@ import { DeployQueue } from '../deploy/queue.ts';
 import { RouteSync } from '../deploy/routes.ts';
 import { CliDockerRunner } from '../docker/cli-runner.ts';
 import type { DockerRunner } from '../docker/runner.ts';
+import { HostMonitor, type HostSource } from '../system/host.ts';
 import { AuditLog } from './audit.ts';
 import { DeployService } from './deploys.ts';
 import { EnvService } from './env.ts';
+import { MetricsService } from './metrics.ts';
 import { ProjectService } from './projects.ts';
 import { RegistryService } from './registries.ts';
 import { SessionService } from './sessions.ts';
@@ -32,6 +34,8 @@ export function createServices(deps: {
   timing?: Partial<HealthTiming>;
   /** Replaces `fs.lchownSync` for `data/` ownership, since tests don't run as root. */
   lchown?: Lchown;
+  /** Replaces `/proc` for host CPU and memory in tests. */
+  hostSource?: HostSource;
   /** False for processes that share the database but must leave deploys to the server. */
   runDeploys?: boolean;
 }) {
@@ -58,6 +62,8 @@ export function createServices(deps: {
   const queue = new DeployQueue({ db, engine, enabled: deps.runDeploys });
   const routes = new RouteSync({ db, caddy });
   const deploys = new DeployService({ db, audit, projects, engine, queue, logs, files, docker, caddy });
+  const host = new HostMonitor({ source: deps.hostSource });
+  const metrics = new MetricsService({ docker, host, projects });
 
-  return { audit, box, projects, env, registries, settings, tokens, sessions, deploys, engine, queue, routes, files, docker };
+  return { audit, box, projects, env, registries, settings, tokens, sessions, deploys, engine, queue, routes, files, docker, host, metrics };
 }

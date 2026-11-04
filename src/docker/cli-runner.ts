@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { parseImageRef } from './image-ref.ts';
-import type { ComposeTarget, ContainerState, ContainerSummary, DockerRunner, LifecycleAction, LineSink, RegistryAuth } from './runner.ts';
+import type { ComposeTarget, ContainerState, ContainerStats, ContainerSummary, DockerRunner, LifecycleAction, LineSink, RegistryAuth } from './runner.ts';
 
 type RunResult = { code: number; stdout: string[]; stderr: string[] };
 
@@ -74,6 +74,24 @@ function docker(
 function failure(args: string[], r: RunResult): Error {
   const last = r.stderr.filter(Boolean).at(-1) ?? r.stdout.filter(Boolean).at(-1) ?? 'no output';
   return new Error(`docker ${args.slice(0, 2).join(' ')} exited with code ${r.code}: ${last}`);
+}
+
+const UNITS: Record<string, number> = {
+  b: 1, kb: 1e3, mb: 1e6, gb: 1e9, tb: 1e12, kib: 1024, mib: 1024 ** 2, gib: 1024 ** 3, tib: 1024 ** 4,
+};
+
+/** "12.5MiB" or "1.2kB" to bytes; 0 for anything it can't read. */
+export function parseSize(text: string): number {
+  const m = /^\s*([\d.]+)\s*([a-z]*)\s*$/i.exec(text);
+  if (!m) return 0;
+  const unit = UNITS[(m[2] || 'b').toLowerCase()];
+  return unit === undefined ? 0 : Math.round(Number(m[1]) * unit);
+}
+
+/** "12.5MiB / 1GiB" to [12.5 MiB, 1 GiB] in bytes. */
+export function parsePair(text: string): [number, number] {
+  const [a = '', b = ''] = text.split('/');
+  return [parseSize(a), parseSize(b)];
 }
 
 function composeArgs(t: ComposeTarget, ...rest: string[]): string[] {
@@ -153,6 +171,34 @@ export class CliDockerRunner implements DockerRunner {
       const c = JSON.parse(line) as { Names: string; State: string; Status: string; Image: string; Labels: string };
       const service = /(?:^|,)com\.docker\.compose\.service=([^,]*)/.exec(c.Labels)?.[1] ?? '';
       return { name: c.Names, service, state: c.State, status: c.Status, image: c.Image };
+    }).sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  async containerStats(): Promise<ContainerStats[]> {
+    // stats has no labels, so a second call maps container names to compose projects.
+    const statsArgs = ['stats', '--no-stream', '--no-trunc', '--format', '{{json .}}'];
+    const psArgs = ['ps', '--no-trunc', '--format', '{{.Names}}\t{{.Label "com.docker.compose.project"}}\t{{.Label "com.docker.compose.service"}}'];
+    const [stats, ps] = await Promise.all([docker(statsArgs), docker(psArgs)]);
+    if (stats.code !== 0) throw failure(statsArgs, stats);
+    if (ps.code !== 0) throw failure(psArgs, ps);
+    const labels = new Map(ps.stdout.filter(Boolean).map((line) => {
+      const [name = '', project = '', service = ''] = line.split('\t');
+      return [name, { project: project || null, service: service || null }];
+    }));
+    return stats.stdout.filter(Boolean).map((line) => {
+      const c = JSON.parse(line) as { Name: string; CPUPerc: string; MemUsage: string; NetIO: string; PIDs: string };
+      const [memBytes, memLimitBytes] = parsePair(c.MemUsage);
+      const [netRxBytes, netTxBytes] = parsePair(c.NetIO);
+      return {
+        name: c.Name,
+        ...(labels.get(c.Name) ?? { project: null, service: null }),
+        cpuPercent: Number.parseFloat(c.CPUPerc) || 0,
+        memBytes,
+        memLimitBytes,
+        netRxBytes,
+        netTxBytes,
+        pids: Number.parseInt(c.PIDs, 10) || 0,
+      };
     }).sort((a, b) => a.name.localeCompare(b.name));
   }
 

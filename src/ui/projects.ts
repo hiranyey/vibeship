@@ -10,8 +10,10 @@ import type { Services } from '../services/index.ts';
 import type { Project } from '../services/projects.ts';
 import { parseInput } from '../services/validate.ts';
 import {
-  ago, alert, duration, emptyRow, field, type Html, pageHeader, pill, postButton, shortDigest, shownOnce, textarea, type View,
+  ago, alert, copyable, copyButton, duration, emptyRow, field, type Html, pageHeader, pill, postButton, shortDigest, shownOnce, textarea, type View,
 } from './view.ts';
+import { sideBySide } from './diff.ts';
+import { hostPanel, projectPanel, usageCell } from './metrics.ts';
 
 type Tab = 'overview' | 'deploys' | 'logs' | 'env' | 'compose' | 'settings';
 type Form = Record<string, string>;
@@ -103,20 +105,36 @@ export function projectPages(deps: { config: Config; services: Services; view: V
           <div class="stat"><div class="stat-label">Failed</div><div class="stat-value">${count('failed')}</div></div>
           <div class="stat"><div class="stat-label">Last deploy</div><div class="stat-value t-lg">${ago(lastDeploy)}</div></div>
         </div>
+        ${hostPanel()}
+        ${projects.length > 0
+          ? html`<div class="filter-bar" data-filter-for="projects-table">
+              <input class="input filter-search" type="search" placeholder="Filter by name or hostname" aria-label="Filter projects" data-filter-search />
+              <div class="chip-group" role="group" aria-label="Filter by status">
+                ${(['all', 'running', 'deploying', 'failed', 'stopped'] as const).map((st) => html`<button class="chip${st === 'all' ? ' is-active' : ''}" type="button" data-filter-status="${st}" aria-pressed="${st === 'all' ? 'true' : 'false'}">${st === 'all' ? 'All' : st}<span class="chip-count">${st === 'all' ? projects.length : count(st)}</span></button>`)}
+              </div>
+            </div>`
+          : ''}
         <div class="table-wrap">
-          <table class="table">
-            <thead><tr><th>Name</th><th>Status</th><th>Hostname</th><th>Kind</th><th>Live version</th><th>Last deploy</th></tr></thead>
+          <table class="table" id="projects-table">
+            <thead><tr><th>Name</th><th>Status</th><th>Hostname</th><th>Kind</th><th>Live version</th><th class="cell-usage">CPU</th><th class="cell-usage">Memory</th><th>Last deploy</th></tr></thead>
             <tbody>
               ${rows.length === 0
-                ? emptyRow(6, html`No projects yet. <a href="/projects/new">Create one</a>, or let an agent do it over MCP.`)
-                : rows.map(({ p, last }) => html`<tr>
+                ? emptyRow(8, html`<div class="empty-state">
+                    <div class="empty-title">No projects yet</div>
+                    <p>Ship a container image or a compose file. Agents can create projects too, over MCP.</p>
+                    <a class="btn btn-primary btn-sm" href="/projects/new">New project</a>
+                  </div>`)
+                : rows.map(({ p, last }) => html`<tr data-filter-row data-name="${p.name} ${p.hostname}" data-status="${p.status}"${p.status === 'deploying' ? html` data-watch="/api/projects/${p.id}" data-watch-status="deploying"` : ''}>
                   <td class="cell-name"><a href="${base(p)}">${p.name}</a></td>
                   <td>${pill(p.status)}</td>
                   <td class="cell-mono"><a href="${view.appUrl(p.hostname)}" rel="noopener noreferrer" target="_blank">${p.hostname}</a></td>
                   <td><span class="badge">${p.kind}</span></td>
                   <td class="cell-mono">${liveVersion(p)}</td>
+                  ${usageCell('data-project', p.name, 'cpu')}
+                  ${usageCell('data-project', p.name, 'mem')}
                   <td>${last ? html`<a href="/deploys/${last.id}">#${last.id}</a> ${pill(last.status, 'deploy')} ${ago(last.createdAt)}` : html`<span class="text-subtle">never</span>`}</td>
                 </tr>`)}
+              <tr class="empty-row" data-filter-empty hidden><td colspan="8" class="text-muted">No projects match. <button class="link-btn" type="button" data-filter-reset>Clear the filter</button></td></tr>
             </tbody>
           </table>
         </div>`,
@@ -229,7 +247,7 @@ export function projectPages(deps: { config: Config; services: Services; view: V
       status,
       crumbs: [{ label: 'Projects', href: '/' }, { label: p.name, href: base(p) }, ...(tab === 'overview' ? [] : [{ label: tab }])],
       body: html`
-        ${pageHeader(html`${p.name} ${pill(p.status)}`, html`<a class="mono" href="${view.appUrl(p.hostname)}" rel="noopener noreferrer" target="_blank">${p.hostname}</a> · ${p.kind}`, html`
+        ${pageHeader(html`${p.name} <span${busy ? html` data-watch="/api/projects/${p.id}" data-watch-status="deploying"` : ''}>${pill(p.status)}</span>`, html`<a class="mono" href="${view.appUrl(p.hostname)}" rel="noopener noreferrer" target="_blank">${p.hostname}</a>${copyButton(view.appUrl(p.hostname), 'Copy the app URL')} · ${p.kind}`, html`
           ${postButton(`${base(p)}/deploy`, busy ? 'Deploying…' : 'Deploy', { cls: 'btn-primary' })}
           ${p.status === 'stopped'
             ? postButton(`${base(p)}/start`, 'Start')
@@ -249,10 +267,12 @@ export function projectPages(deps: { config: Config; services: Services; view: V
     try {
       const st = await s.deploys.status(p.id);
       containers = html`<table class="table">
-        <thead><tr><th>Container</th><th>Service</th><th>State</th><th>Status</th><th>Image</th></tr></thead>
+        <thead><tr><th>Container</th><th>Service</th><th>State</th><th>Status</th><th class="cell-usage">CPU</th><th class="cell-usage">Memory</th><th class="cell-usage">Net in / out</th><th class="cell-usage">PIDs</th><th>Image</th></tr></thead>
         <tbody>${st.containers.length === 0
-          ? emptyRow(5, p.status === 'created' ? 'Not deployed yet.' : 'No containers.')
-          : st.containers.map((ct) => html`<tr><td class="cell-mono">${ct.name}</td><td class="cell-mono">${ct.service}</td><td>${ct.state}</td><td>${ct.status}</td><td class="cell-mono cell-wrap">${ct.image}</td></tr>`)}</tbody>
+          ? emptyRow(9, p.status === 'created' ? 'Not deployed yet.' : 'No containers.')
+          : st.containers.map((ct) => html`<tr><td class="cell-mono">${ct.name}</td><td class="cell-mono">${ct.service}</td><td>${ct.state}</td><td>${ct.status}</td>${
+            (['cpu', 'mem', 'net', 'pids'] as const).map((f) => usageCell('data-ct', ct.name, f))
+          }<td class="cell-mono cell-wrap">${ct.image}</td></tr>`)}</tbody>
       </table>`;
     } catch (err) {
       containers = alert('warning', `Could not read containers from Docker: ${(err as Error).message}`);
@@ -261,13 +281,14 @@ export function projectPages(deps: { config: Config; services: Services; view: V
     return shell(c, p, 'overview', html`
       ${driftAlert(p, drift)}
       ${last?.status === 'failed' ? alert('danger', html`${last.failureReason ?? 'unknown reason'} · <a href="/deploys/${last.id}">deploy #${last.id}</a>`, 'Last deploy failed') : ''}
+      ${projectPanel(p.id)}
       <div class="card card-pad">
         <div class="props">
-          <div class="props-key">Hostname</div><div class="props-val mono">${p.hostname}</div>
-          <div class="props-key">Upstream</div><div class="props-val mono">${p.upstream}</div>
+          <div class="props-key">Hostname</div><div class="props-val">${copyable(p.hostname)}</div>
+          <div class="props-key">Upstream</div><div class="props-val">${copyable(p.upstream)}</div>
           <div class="props-key">Live version</div><div class="props-val mono">${liveVersion(p, true)}</div>
           ${p.image
-            ? html`<div class="props-key">Image</div><div class="props-val mono">${p.image.imageRef}</div>
+            ? html`<div class="props-key">Image</div><div class="props-val">${copyable(p.image.imageRef)}</div>
               <div class="props-key">Port</div><div class="props-val mono">${p.image.containerPort}</div>
               <div class="props-key">Health</div><div class="props-val mono">${p.image.healthPath ? `GET ${p.image.healthPath}` : 'container stays up'}</div>
               <div class="props-key">Memory limit</div><div class="props-val mono">${p.image.memLimit ?? 'none'}</div>
@@ -315,7 +336,10 @@ export function projectPages(deps: { config: Config; services: Services; view: V
         <table class="table">
           <thead><tr><th>Key</th><th>Value</th><th>Updated</th><th></th></tr></thead>
           <tbody>${env.length === 0
-            ? emptyRow(4, 'No env vars.')
+            ? emptyRow(4, html`<div class="empty-state">
+                <div class="empty-title">No env vars yet</div>
+                <p>Add <code class="inline">KEY=value</code> lines below, for example <code class="inline">DATABASE_URL=postgres://…</code>. Tick <em>Secret</em> for API keys and passwords.</p>
+              </div>`)
             : env.map((e) => html`<tr>
               <td class="cell-mono">${e.key}</td>
               <td class="cell-mono cell-wrap">${e.isSecret ? html`<span class="env-secret" title="Secret: write-only">••••••••</span> <span class="badge">secret</span>` : e.value}</td>
@@ -372,12 +396,13 @@ export function projectPages(deps: { config: Config; services: Services; view: V
       <h2 class="section-title">Versions</h2>
       <div class="table-wrap">
         <table class="table">
-          <thead><tr><th>Version</th><th>Routes to</th><th>Note</th><th>Saved</th><th></th></tr></thead>
+          <thead><tr><th>Version</th><th>Routes to</th><th>Note</th><th>Saved</th><th>Changes</th><th></th></tr></thead>
           <tbody>${versions.map((cv) => html`<tr>
             <td><a href="${base(p)}/compose/${cv.version}">v${cv.version}</a>${cv.version === p.deployedComposeVersion ? html` <span class="badge">live</span>` : ''}</td>
             <td class="cell-mono">${cv.routedService}:${cv.port}</td>
             <td class="cell-wrap">${cv.note ?? ''}</td>
             <td>${ago(cv.createdAt)} by ${cv.createdBy}</td>
+            <td>${cv.version > 1 ? html`<a href="${base(p)}/compose/${cv.version}#diff">diff v${cv.version - 1}</a>` : html`<span class="text-subtle">first</span>`}</td>
             <td class="cell-actions">${postButton(`${base(p)}/deploy`, 'Deploy', { cls: 'btn-secondary btn-sm', hidden: { composeVersion: String(cv.version) }, confirm: `Deploy compose version ${cv.version} of ${p.name}?` })}</td>
           </tr>`)}</tbody>
         </table>
@@ -391,6 +416,7 @@ export function projectPages(deps: { config: Config; services: Services; view: V
     const n = Number(c.req.param('version'));
     if (!Number.isInteger(n) || n < 1) throw new AppError('not_found', 'Compose version not found');
     const cv = s.projects.getComposeVersion(p.id, n);
+    const prev = n > 1 ? s.projects.getComposeVersion(p.id, n - 1) : null;
     return shell(c, p, 'compose', html`
       <div class="card card-pad">
         <div class="props">
@@ -401,7 +427,7 @@ export function projectPages(deps: { config: Config; services: Services; view: V
           <div class="props-key">Saved</div><div class="props-val">${ago(cv.createdAt)} by ${cv.createdBy}</div>
         </div>
       </div>
-      <pre class="pre-block pre-yaml">${cv.composeYaml}</pre>
+      ${prev ? composeDiff(prev.version, prev.composeYaml, cv.version, cv.composeYaml) : html`<pre class="pre-block pre-yaml">${cv.composeYaml}</pre>`}
       <div class="row">
         ${postButton(`${base(p)}/deploy`, `Deploy version ${cv.version}`, { cls: 'btn-primary', hidden: { composeVersion: String(cv.version) } })}
         <a class="btn btn-ghost" href="${base(p)}/compose">All versions</a>
@@ -475,12 +501,12 @@ export function projectPages(deps: { config: Config; services: Services; view: V
             })}<span class="text-muted t-sm">${p.hasWebhook ? 'A webhook URL is set.' : 'No webhook yet.'}</span></div>
           </div>`
         : ''}
-      <form class="card card-pad danger-zone form-stack" method="post" action="${base(p)}/delete" data-confirm="Delete ${p.name}? This cannot be undone.">
+      <form class="card card-pad danger-zone form-stack" method="post" action="${base(p)}/delete">
         <h2 class="section-title">Delete project</h2>
         <p class="text-muted t-sm mt-0">Stops the containers and removes the route, files and history. <span class="mono">data/</span> and named volumes are kept unless you tick the box.</p>
         <label class="checkbox"><input type="checkbox" name="deleteData" /> Also delete data/ and named volumes</label>
-        ${field({ label: `Type ${p.name} to confirm`, name: 'confirmName', mono: true, required: true, attrs: 'autocomplete="off"' })}
-        <div class="form-actions"><button class="btn btn-danger" type="submit">Delete ${p.name}</button></div>
+        ${field({ label: `Type ${p.name} to confirm`, name: 'confirmName', mono: true, required: true, attrs: `autocomplete="off" spellcheck="false" data-confirm-name="${p.name}"` })}
+        <div class="form-actions"><button class="btn btn-danger" type="submit" data-confirm-target>Delete ${p.name}</button><span class="text-muted t-sm">This cannot be undone.</span></div>
       </form>`, opts.error ? 400 : undefined);
   };
 
@@ -563,7 +589,7 @@ export function projectPages(deps: { config: Config; services: Services; view: V
         ${d.status === 'healthy' ? alert('success', html`<a href="${view.appUrl(p.hostname)}" rel="noopener noreferrer" target="_blank">${p.hostname}</a> is serving this version.`, 'Live') : ''}
         <div class="card card-pad">
           <div class="props">
-            <div class="props-key">Version</div><div class="props-val mono">${p.kind === 'image' ? d.digest ?? 'latest for the tag' : version ? `compose version ${version}` : 'unknown'}</div>
+            <div class="props-key">Version</div><div class="props-val mono">${p.kind === 'image' ? d.digest ? copyable(d.digest) : 'latest for the tag' : version ? `compose version ${version}` : 'unknown'}</div>
             <div class="props-key">Queued</div><div class="props-val">${ago(d.createdAt)}</div>
             <div class="props-key">Took</div><div class="props-val">${duration(d.startedAt, d.finishedAt) || (finished ? '' : 'still going')}</div>
           </div>
@@ -598,8 +624,30 @@ export function lineClass(stream: string, line: string): string {
 }
 
 function liveVersion(p: Project, long = false): Html {
-  if (p.kind === 'image') return long && p.image?.currentDigest ? html`<span class="mono">${p.image.currentDigest}</span>` : shortDigest(p.image?.currentDigest);
+  if (p.kind === 'image') return long && p.image?.currentDigest ? copyable(p.image.currentDigest) : shortDigest(p.image?.currentDigest);
   return p.deployedComposeVersion === null ? html`<span class="text-subtle">none</span>` : html`compose v${p.deployedComposeVersion}`;
+}
+
+/** Two-column diff of a compose version against the one before it. */
+function composeDiff(beforeNo: number, before: string, afterNo: number, after: string): Html {
+  const rows = sideBySide(before, after);
+  const changed = rows.filter((r) => r.kind === 'change');
+  const added = changed.filter((r) => r.kind === 'change' && r.right !== null).length;
+  const removed = changed.filter((r) => r.kind === 'change' && r.left !== null).length;
+  const cell = (no: number | null, text: string | null, cls: string) =>
+    html`<span class="diff-no">${no ?? ''}</span><span class="diff-text ${text === null ? 'diff-blank' : cls}">${text ?? ''}</span>`;
+  return html`<div class="diff" id="diff">
+    <div class="diff-header">
+      <strong>Changes from v${beforeNo}</strong>
+      <span class="diff-stats">${changed.length === 0 ? html`<span class="text-muted">identical</span>` : html`<span class="diff-stat-add">+${added}</span> <span class="diff-stat-del">−${removed}</span>`}</span>
+    </div>
+    <div class="diff-cols"><div>v${beforeNo}</div><div>v${afterNo}</div></div>
+    <div class="diff-body">${rows.map((r) => r.kind === 'fold'
+      ? html`<div class="diff-fold">⋯ ${r.count} unchanged line${r.count === 1 ? '' : 's'}</div>`
+      : r.kind === 'same'
+        ? html`<div class="diff-row">${cell(r.leftNo, r.left, '')}${cell(r.rightNo, r.right, '')}</div>`
+        : html`<div class="diff-row">${cell(r.leftNo, r.left, 'diff-del')}${cell(r.rightNo, r.right, 'diff-add')}</div>`)}</div>
+  </div>`;
 }
 
 function driftAlert(p: Project, drift: { files: Array<{ path: string; state: string }>; pendingChanges: boolean }): Html {
@@ -617,7 +665,10 @@ function deployTable(deploys: Deploy[], versions: Map<number, number>): Html {
   return html`<table class="table">
     <thead><tr><th>Deploy</th><th>Status</th><th>Trigger</th><th>Version</th><th>By</th><th>Queued</th><th>Took</th><th>Reason</th></tr></thead>
     <tbody>${deploys.length === 0
-      ? emptyRow(8, 'No deploys yet.')
+      ? emptyRow(8, html`<div class="empty-state">
+          <div class="empty-title">No deploys yet</div>
+          <p>Press <strong>Deploy</strong> above, or let CI post to the project's webhook.</p>
+        </div>`)
       : deploys.map((d) => html`<tr>
         <td><a href="/deploys/${d.id}">#${d.id}</a></td>
         <td>${pill(d.status, 'deploy')}</td>

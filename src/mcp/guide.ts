@@ -549,7 +549,7 @@ Setup order:
 4. Push to trigger the first CI build and webhook deploy (or call deploy).
 5. Verify with list_deploys and get_status; read get_deploy_logs if a deploy failed.
 
-deploy returns an id at once: poll get_deploy_logs (pass afterSeq) until healthy or failed. A failed deploy brings back the last healthy version. Env changes apply on the next deploy, not on restart. For debugging, use get_deploy_logs, get_container_logs and get_status.`;
+deploy returns an id at once: poll get_deploy_logs (pass afterSeq) until healthy or failed. A failed deploy brings back the last healthy version. Env changes apply on the next deploy, not on restart. For debugging, use get_deploy_logs, get_container_logs and get_status; get_resource_usage shows CPU and memory for the VM and each project.`;
 }
 
 /** The ship_new_app prompt: the setup order as steps for an agent. */

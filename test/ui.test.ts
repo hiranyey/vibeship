@@ -76,6 +76,8 @@ test('the dashboard and every page render with security headers', async (t) => {
   }
   const home = await (await b.get('/')).text();
   assert.match(home, /No projects yet/);
+  assert.match(home, /data-metrics="\/api\/metrics"/, 'the dashboard shows the server panel');
+  assert.match(home, /data-copy-text="http:\/\/vibeship\.localhost:8080\/mcp"/, 'the MCP URL has a copy button');
   // The topbar shows only the log out button, not the user's name, email or an admin badge.
   assert.match(home, /<form method="post" action="\/auth\/logout">/);
   assert.doesNotMatch(home, /admin@example\.com|class="user-chip"|class="brand-sub"/);
@@ -132,6 +134,8 @@ test('the wizard creates an image project with env, deploys it, and shows the li
   }
   const overview = await (await b.get('/projects/hello')).text();
   assert.match(overview, /hello\.localhost/);
+  assert.match(overview, /data-metrics="\/api\/projects\/\d+\/metrics"/, 'the overview shows the project panel');
+  assert.match(overview, /data-ct="hello" data-usage="cpu"/);
   assert.match(overview, /sha256:/);
   assert.doesNotMatch(await (await b.get('/projects/hello/env')).text(), /s3cret/, 'secret values are never shown');
   assert.match(await (await b.get('/projects/hello/logs')).text(), /data-stream="\/api\/projects\/\d+\/logs\?tail=300"/);
@@ -211,6 +215,11 @@ test('compose projects: create, save a new version and deploy an older one', asy
   const versions = await (await b.get('/projects/blog/compose')).text();
   assert.match(versions, /v2<\/a> <span class="badge">live/);
   assert.match(await (await b.get('/projects/blog/compose/1')).text(), /nginx:1\.29/);
+  const v2 = await (await b.get('/projects/blog/compose/2')).text();
+  assert.match(v2, /Changes from v1/);
+  assert.match(v2, /class="diff-text diff-del">    image: nginx:1\.29</);
+  assert.match(v2, /class="diff-text diff-add">    image: nginx:1\.30</);
+  assert.match(versions, /href="\/projects\/blog\/compose\/2#diff">diff v1</);
 
   const again = await b.follow(await b.post('/projects/blog/deploy', { composeVersion: '1' }));
   await b.queue.idle();

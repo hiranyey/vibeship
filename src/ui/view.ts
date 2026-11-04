@@ -151,11 +151,14 @@ export class View {
           ? html`<aside class="sidebar" aria-label="Primary">
               <div class="label-caps">Navigate</div>
               ${NAV.map((n) => html`<a class="nav-item${n.key === opts.nav ? ' is-active' : ''}" href="${n.href}"${n.key === opts.nav ? raw(' aria-current="page"') : ''}>${n.label}</a>`)}
-              <div class="sidebar-footer">MCP: <span class="mono">${this.#config.publicUrl}/mcp</span></div>
+              <div class="sidebar-footer">
+                <div class="sidebar-footer-head">MCP ${copyButton(`${this.#config.publicUrl}/mcp`, 'Copy the MCP URL')}</div>
+                <span class="mono">${this.#config.publicUrl}/mcp</span>
+              </div>
             </aside>`
           : ''}
         <main class="main">
-          ${flash ? alert(flash.kind, flash.text) : ''}
+          ${flash ? alert(flash.kind, flash.text, undefined, flash.kind === 'success') : ''}
           ${opts.body}
         </main>
       </div>
@@ -182,8 +185,9 @@ function initials(name: string): string {
   return ((parts[0]?.[0] ?? '?') + (parts[1]?.[0] ?? '')).toUpperCase();
 }
 
-export function alert(kind: Flash['kind'], text: Html | string, title?: string): Html {
-  return html`<div class="alert alert-${kind}" role="${kind === 'danger' ? 'alert' : 'status'}"><div>${
+/** A callout. `autoDismiss` fades it out after a few seconds (used for success notices). */
+export function alert(kind: Flash['kind'], text: Html | string, title?: string, autoDismiss = false): Html {
+  return html`<div class="alert alert-${kind}" role="${kind === 'danger' ? 'alert' : 'status'}"${autoDismiss ? raw(' data-autodismiss') : ''}><div>${
     title ? html`<div class="alert-title">${title}</div>` : ''
   }<div class="alert-body">${text}</div></div></div>`;
 }
@@ -296,5 +300,18 @@ export function shownOnce(label: string, value: string, warning: string): Html {
 }
 
 export function emptyRow(cols: number, text: Html | string): Html {
-  return html`<tr><td colspan="${cols}" class="text-muted">${text}</td></tr>`;
+  return html`<tr class="empty-row"><td colspan="${cols}" class="text-muted">${text}</td></tr>`;
+}
+
+const COPY_ICON = raw('<svg class="copy-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M10.5 3.5v-.5A1.5 1.5 0 0 0 9 1.5H3A1.5 1.5 0 0 0 1.5 3v6A1.5 1.5 0 0 0 3 10.5h.5" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>');
+const CHECK_ICON = raw('<svg class="check-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3 8.5l3.2 3L13 4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>');
+
+/** A small icon button that copies `text` to the clipboard (handled by ui.js). */
+export function copyButton(text: string, label = 'Copy'): Html {
+  return html`<button class="copy-btn" type="button" data-copy-text="${text}" aria-label="${label}" title="${label}">${COPY_ICON}${CHECK_ICON}</button>`;
+}
+
+/** `text` in monospace with a copy button after it. */
+export function copyable(text: string, display?: Html | string): Html {
+  return html`<span class="copyable"><span class="mono">${display ?? text}</span>${copyButton(text, `Copy ${text.length > 40 ? 'value' : text}`)}</span>`;
 }
