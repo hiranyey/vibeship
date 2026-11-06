@@ -51,7 +51,10 @@ const SIDEBAR_COOKIE = 'vs_sidebar';
 export type PageOptions = {
   title: string;
   nav?: Nav;
-  /** Breadcrumb trail, shown in the top bar; the last entry is the current page. Labels match page and tab names. */
+  /**
+   * Breadcrumb trail; the last entry is the current page. The top bar shows
+   * only the entries before it (the page header already names the page).
+   */
   crumbs?: Array<{ label: string; href?: string }>;
   body: Html;
   status?: 200 | 400 | 403 | 404 | 409 | 500 | 503;
@@ -113,7 +116,7 @@ export class View {
     const p = c.get('principal');
     const user = p?.kind === 'user' ? p.user : null;
     const flash = this.#takeFlash(c);
-    const crumbs = opts.crumbs ?? [];
+    const parents = (opts.crumbs ?? []).slice(0, -1);
     const collapsed = getCookie(c, SIDEBAR_COOKIE) === 'collapsed';
     const mcpUrl = `${this.#config.publicUrl}/mcp`;
     c.header('Content-Security-Policy', CSP);
@@ -139,13 +142,13 @@ export class View {
             <img class="brand-mark" src="/favicon.svg" alt="" width="30" height="30" />
             <span class="brand-title">Vibeship</span>
           </a>
-          ${crumbs.length > 0
-            ? html`<nav class="breadcrumb" aria-label="Breadcrumb">${crumbs.map((cr, i) => html`<span class="breadcrumb-sep" aria-hidden="true">/</span>${
-                cr.href && i < crumbs.length - 1 ? html`<a href="${cr.href}">${cr.label}</a>` : html`<span class="breadcrumb-current" aria-current="page">${cr.label}</span>`
+          ${parents.length > 0
+            ? html`<nav class="breadcrumb" aria-label="Breadcrumb">${parents.map((cr) => html`<span class="breadcrumb-sep" aria-hidden="true">/</span>${
+                cr.href ? html`<a href="${cr.href}">${cr.label}</a>` : html`<span>${cr.label}</span>`
               }`)}</nav>`
             : ''}
         </div>
-        <div class="topbar-right">${user ? userMenu(user.email) : ''}</div>
+        <div class="topbar-right">${user ? account(user.email) : ''}</div>
       </header>
       <div class="shell-body">
         ${user
@@ -204,20 +207,10 @@ export function initials(email: string): string {
   return (email.trim()[0] ?? '?').toUpperCase();
 }
 
-/** The signed-in email and Log out, behind the avatar. Works without JS (details/summary). */
-function userMenu(email: string): Html {
-  return html`<details class="user-menu">
-    <summary class="user-menu-trigger" aria-label="Account: ${email}">
-      <span class="avatar" aria-hidden="true">${initials(email)}</span>
-      <span class="user-menu-email">${email}</span>
-      ${icon('chevron-down', 14)}
-    </summary>
-    <div class="dropdown-menu">
-      <div class="dropdown-meta">
-        <div class="dropdown-meta-label">Signed in as</div>
-        <div class="dropdown-meta-value">${email}</div>
-      </div>
-      <form method="post" action="/auth/logout"><button class="dropdown-item" type="submit">${icon('logout', 16)}Log out</button></form>
-    </div>
-  </details>`;
+/** The signed-in email, then Log out. */
+function account(email: string): Html {
+  return html`<div class="account">
+    <span class="account-email" title="Signed in as ${email}">${email}</span>
+    <form method="post" action="/auth/logout"><button class="btn btn-secondary btn-sm" type="submit">${icon('logout', 16)}Log out</button></form>
+  </div>`;
 }

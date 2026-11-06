@@ -267,7 +267,7 @@ export function projectPages(deps: { config: Config; services: Services; view: V
       title: tab === 'overview' ? p.name : `${label} · ${p.name}`,
       nav: 'projects',
       status,
-      crumbs: [{ label: 'Projects', href: '/' }, { label: p.name, href: base(p) }, ...(tab === 'overview' ? [] : [{ label }])],
+      crumbs: [{ label: 'Projects', href: '/' }, { label: p.name }],
       body: html`
         <div>
           ${pageHeader(

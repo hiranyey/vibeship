@@ -405,19 +405,6 @@
     document.cookie = 'vs_sidebar=' + (collapsed ? 'collapsed' : 'expanded') + '; path=/; max-age=31536000; samesite=lax';
   });
 
-  // ——— User menu (details/summary): close on a click outside or Escape ———
-
-  const menu = document.querySelector('.user-menu');
-  if (menu) {
-    document.addEventListener('click', (e) => { if (menu.open && !menu.contains(e.target)) menu.open = false; });
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && menu.open) {
-        menu.open = false;
-        menu.querySelector('summary').focus();
-      }
-    });
-  }
-
   // Success notices fade out on their own; errors stay until the next page.
   for (const el of document.querySelectorAll('[data-autodismiss]')) {
     let timer;

@@ -78,9 +78,10 @@ test('the dashboard and every page render with security headers', async (t) => {
   assert.match(home, /No projects yet/);
   assert.match(home, /data-metrics="\/api\/metrics"/, 'the dashboard shows the server panel');
   assert.match(home, /data-copy-text="http:\/\/vibeship\.localhost:8080\/mcp"/, 'the MCP URL has a copy button');
-  // The topbar has a user menu with the signed-in email and Log out; breadcrumbs start next to the logo.
-  assert.match(home, /<details class="user-menu">[\s\S]*admin@example\.com[\s\S]*<form method="post" action="\/auth\/logout">/);
-  assert.match(home, /<nav class="breadcrumb" aria-label="Breadcrumb"><span class="breadcrumb-sep" aria-hidden="true">\/<\/span><span class="breadcrumb-current" aria-current="page">Projects<\/span>/);
+  // The topbar shows the signed-in email and a Log out button. A top-level page has no breadcrumb:
+  // its header already names it.
+  assert.match(home, /<span class="account-email"[^>]*>admin@example\.com<\/span>\s*<form method="post" action="\/auth\/logout">/);
+  assert.doesNotMatch(home, /class="breadcrumb"/);
   // One confirm dialog for destructive actions, and no stat cards duplicating the filter chips.
   assert.match(home, /<dialog class="modal" id="confirm-dialog"/);
   assert.doesNotMatch(home, /class="stat-strip"/);
