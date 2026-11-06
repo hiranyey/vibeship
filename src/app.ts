@@ -5,8 +5,7 @@ import type { Config } from './config.ts';
 import type { Db } from './db/db.ts';
 import { AppError } from './errors.ts';
 import { apiRoutes } from './http/api.ts';
-import { type AppEnv, authenticate } from './http/auth.ts';
-import { clientIp, TrustedProxies } from './http/client-ip.ts';
+import { type AppEnv, authenticate, clientIp } from './http/auth.ts';
 import { authRoutes } from './http/auth-routes.ts';
 import { hookRoutes, WEBHOOK_BODY_LIMIT_BYTES } from './http/hooks.ts';
 import { mcpRoute } from './mcp/route.ts';
@@ -19,8 +18,6 @@ export type AppDeps = {
   services: Services;
   /** A fake for tests; by default built from `config.oidc`, or null when login isn't configured. */
   oidc?: OidcClient | null;
-  /** Who may name the client in X-Real-Ip; by default the IPs in `config.trustedProxies` (server.ts also resolves the hostnames). */
-  proxies?: TrustedProxies;
 };
 
 const tooLarge = () => {
@@ -33,7 +30,7 @@ const tooLarge = () => {
  * Vibeship directly without going through Caddy, so nothing relies on Caddy
  * to keep anyone out.
  */
-export function createApp({ config, db, services, oidc, proxies = new TrustedProxies(config.trustedProxies) }: AppDeps): Hono<AppEnv> {
+export function createApp({ config, db, services, oidc }: AppDeps): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   const login = oidc !== undefined ? oidc : config.oidc ? new HttpOidcClient(config.oidc) : null;
 
@@ -42,10 +39,10 @@ export function createApp({ config, db, services, oidc, proxies = new TrustedPro
     return c.json({ ok: true });
   });
 
-  const auth = authenticate(config, services, proxies);
+  const auth = authenticate(config, services);
   app.use('*', async (c, next) => {
     if (c.req.path.startsWith('/hooks/')) {
-      c.set('ip', clientIp(c, proxies));
+      c.set('ip', clientIp(c));
       c.set('principal', null);
       return next();
     }

@@ -5,7 +5,6 @@ import { loadConfig } from './config.ts';
 import { Db } from './db/db.ts';
 import { migrate } from './db/migrate.ts';
 import { recoverInterruptedDeploys } from './deploy/recovery.ts';
-import { TrustedProxies } from './http/client-ip.ts';
 import { createServices } from './services/index.ts';
 
 const config = loadConfig();
@@ -24,11 +23,7 @@ services.queue.start();
 services.routes.start();
 services.host.start();
 
-// Caddy's addresses, so its X-Real-Ip (the real client behind Cloudflare) is believed from it alone.
-const proxies = new TrustedProxies(config.trustedProxies);
-proxies.start();
-
-const app = createApp({ config, db, services, proxies });
+const app = createApp({ config, db, services });
 
 const server = serve({ fetch: app.fetch, port: config.port }, (info) => {
   console.log(`Vibeship listening on :${info.port}, public URL ${config.publicUrl}`);
@@ -40,7 +35,6 @@ function shutdown(signal: string) {
   services.queue.stop();
   services.routes.stop();
   services.host.stop();
-  proxies.stop();
   server.close(() => {
     db.close();
     process.exit(0);
