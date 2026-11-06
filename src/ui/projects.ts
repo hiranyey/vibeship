@@ -103,7 +103,7 @@ export function projectPages(deps: { config: Config; services: Services; view: V
         <div class="stat-strip">
           <div class="stat"><div class="stat-label">Projects</div><div class="stat-value">${projects.length}</div></div>
           <div class="stat"><div class="stat-label">Running</div><div class="stat-value">${count('running')}</div></div>
-          <div class="stat"><div class="stat-label">Failed</div><div class="stat-value">${count('failed')}</div></div>
+          <div class="stat${count('failed') > 0 ? ' stat-alert' : ''}"><div class="stat-label">Failed</div><div class="stat-value">${count('failed')}</div></div>
           <div class="stat"><div class="stat-label">Last deploy</div><div class="stat-value t-lg">${ago(lastDeploy)}</div></div>
         </div>
         ${hostPanel()}
@@ -133,7 +133,7 @@ export function projectPages(deps: { config: Config; services: Services; view: V
                   <td class="cell-mono">${liveVersion(p)}</td>
                   ${usageCell('data-project', p.name, 'cpu')}
                   ${usageCell('data-project', p.name, 'mem')}
-                  <td>${last ? html`<a href="/deploys/${last.id}">#${last.id}</a> ${pill(last.status, 'deploy')} ${ago(last.createdAt)}` : html`<span class="text-subtle">never</span>`}</td>
+                  <td>${last ? deployRef(last) : html`<span class="text-subtle">never</span>`}</td>
                 </tr>`)}
               <tr class="empty-row" data-filter-empty hidden><td colspan="8" class="text-muted">No projects match. <button class="link-btn" type="button" data-filter-reset>Clear the filter</button></td></tr>
             </tbody>
@@ -179,9 +179,9 @@ export function projectPages(deps: { config: Config; services: Services; view: V
           </div>
           ${kind === 'image'
             ? html`<div class="form-grid">
-                ${field({ label: 'Image', name: 'imageRef', value: f.imageRef, required: true, mono: true, placeholder: 'registry.example.com/library/app:latest', help: 'Without a digest; deploys pin the digest.' })}
+                ${field({ label: 'Image', name: 'imageRef', value: f.imageRef, required: true, mono: true, wide: true, placeholder: 'registry.example.com/library/app:latest', help: 'Without a digest; deploys pin the digest.' })}
                 ${field({ label: 'Container port', name: 'containerPort', value: f.containerPort, type: 'number', required: true, attrs: 'min="1" max="65535"' })}
-                <div class="field">
+                <div class="field field-wide">
                   <label class="field-label" for="f-registryId">Registry login</label>
                   <select class="select" id="f-registryId" name="registryId">
                     <option value="">Matched by host, or anonymous</option>
@@ -242,17 +242,18 @@ export function projectPages(deps: { config: Config; services: Services; view: V
       ['settings', 'Settings'],
     ];
     const busy = p.status === 'deploying';
+    const idle = hasLiveVersion(p) ? undefined : 'Nothing is running yet. Deploy first.';
     return view.render(c, {
       title: p.name,
       nav: 'projects',
       status,
       crumbs: [{ label: 'Projects', href: '/' }, { label: p.name, href: base(p) }, ...(tab === 'overview' ? [] : [{ label: tab }])],
       body: html`
-        ${pageHeader(html`${p.name} <span${busy ? html` data-watch="/api/projects/${p.id}" data-watch-status="deploying"` : ''}>${pill(p.status)}</span>`, html`<a class="mono" href="${view.appUrl(p.hostname)}" rel="noopener noreferrer" target="_blank">${p.hostname}</a>${copyButton(view.appUrl(p.hostname), 'Copy the app URL')} · ${p.kind}`, html`
+        ${pageHeader(html`${p.name} <span${busy ? html` data-watch="/api/projects/${p.id}" data-watch-status="deploying"` : ''}>${pill(p.status)}</span>`, html`<a class="mono" href="${view.appUrl(p.hostname)}" rel="noopener noreferrer" target="_blank">${p.hostname}</a>${copyButton(view.appUrl(p.hostname), 'Copy the app URL')}<span class="badge">${p.kind}</span>`, html`
           ${postButton(`${base(p)}/deploy`, busy ? 'Deploying…' : 'Deploy', { cls: 'btn-primary', icon: 'rocket' })}
           ${p.status === 'stopped'
             ? postButton(`${base(p)}/start`, 'Start')
-            : html`${postButton(`${base(p)}/restart`, 'Restart')}${postButton(`${base(p)}/stop`, 'Stop', { confirm: `Stop ${p.name}? Its hostname answers 404 until you start it.` })}`}
+            : html`${postButton(`${base(p)}/restart`, 'Restart', { disabledReason: idle })}${postButton(`${base(p)}/stop`, 'Stop', { disabledReason: idle, confirm: `Stop ${p.name}? Its hostname answers 404 until you start it.` })}`}
         `)}
         <nav class="tab-list" aria-label="Project sections">
           ${tabs.map(([t, label]) => html`<a class="tab" href="${t === 'overview' ? base(p) : `${base(p)}/${t}`}" aria-selected="${t === tab ? 'true' : 'false'}"${t === tab ? raw(' aria-current="page"') : ''}>${label}</a>`)}
@@ -267,11 +268,14 @@ export function projectPages(deps: { config: Config; services: Services; view: V
     let containers: Html;
     try {
       const st = await s.deploys.status(p.id);
-      containers = html`<table class="table">
+      containers = st.containers.length === 0
+        ? html`<div class="empty-state">
+            <div class="empty-title">${p.status === 'created' ? 'Not deployed yet' : p.status === 'stopped' ? 'Stopped' : 'No containers running'}</div>
+            <p>${p.status === 'created' ? 'Press Deploy above to start the first container.' : p.status === 'stopped' ? 'Press Start above to bring it back.' : 'Nothing is running for this project. The latest deploy log says why.'}</p>
+          </div>`
+        : html`<table class="table">
         <thead><tr><th>Container</th><th>Service</th><th>State</th><th>Status</th><th class="cell-usage">CPU</th><th class="cell-usage">Memory</th><th class="cell-usage">Net in / out</th><th class="cell-usage">PIDs</th><th>Image</th></tr></thead>
-        <tbody>${st.containers.length === 0
-          ? emptyRow(9, p.status === 'created' ? 'Not deployed yet.' : 'No containers.')
-          : st.containers.map((ct) => html`<tr><td class="cell-mono">${ct.name}</td><td class="cell-mono">${ct.service}</td><td>${ct.state}</td><td>${ct.status}</td>${
+        <tbody>${st.containers.map((ct) => html`<tr><td class="cell-mono">${ct.name}</td><td class="cell-mono">${ct.service}</td><td>${ct.state}</td><td>${ct.status}</td>${
             (['cpu', 'mem', 'net', 'pids'] as const).map((f) => usageCell('data-ct', ct.name, f))
           }<td class="cell-mono cell-wrap">${ct.image}</td></tr>`)}</tbody>
       </table>`;
@@ -297,7 +301,7 @@ export function projectPages(deps: { config: Config; services: Services; view: V
               <div class="props-key">Webhook</div><div class="props-val">${p.hasWebhook ? 'configured' : html`none · <a href="${base(p)}/settings">create one</a>`}</div>`
             : html`<div class="props-key">Latest compose</div><div class="props-val">version ${p.compose?.version} · routes to <span class="mono">${p.compose?.routedService}:${p.compose?.port}</span></div>
               <div class="props-key">Health</div><div class="props-val mono">${p.compose?.healthPath ? `GET ${p.compose.healthPath}` : 'container stays up'}</div>`}
-          <div class="props-key">Last deploy</div><div class="props-val">${last ? html`<a href="/deploys/${last.id}">#${last.id}</a> ${pill(last.status, 'deploy')} ${ago(last.createdAt)} by ${last.actor}` : 'never'}</div>
+          <div class="props-key">Last deploy</div><div class="props-val">${last ? deployRef(last, last.actor) : 'never'}</div>
           <div class="props-key">Created</div><div class="props-val">${ago(p.createdAt)} by ${p.createdBy}</div>
         </div>
       </div>
@@ -345,7 +349,7 @@ export function projectPages(deps: { config: Config; services: Services; view: V
               <td class="cell-mono">${e.key}</td>
               <td class="cell-mono cell-wrap">${e.isSecret ? html`<span class="env-secret" title="Secret: write-only">••••••••</span> <span class="badge">secret</span>` : e.value}</td>
               <td>${ago(e.updatedAt)} by ${e.updatedBy}</td>
-              <td class="cell-actions">${postButton(`${base(p)}/env/unset`, 'Remove', { cls: 'btn-ghost btn-sm', hidden: { key: e.key }, confirm: `Remove ${e.key}?` })}</td>
+              <td class="cell-actions">${postButton(`${base(p)}/env/unset`, 'Remove', { cls: 'btn-ghost-danger btn-sm', hidden: { key: e.key }, confirm: `Remove ${e.key}?` })}</td>
             </tr>`)}</tbody>
         </table>
       </div>
@@ -474,16 +478,16 @@ export function projectPages(deps: { config: Config; services: Services; view: V
         <div class="form-grid">
           ${field({ label: 'Hostname', name: 'hostname', value: f.hostname, required: true, mono: true, help: 'Changes the route once deployed.' })}
           ${p.kind === 'image'
-            ? html`${field({ label: 'Image', name: 'imageRef', value: f.imageRef, required: true, mono: true })}
+            ? html`${field({ label: 'Image', name: 'imageRef', value: f.imageRef, required: true, mono: true, wide: true })}
               ${field({ label: 'Container port', name: 'containerPort', value: f.containerPort, type: 'number', required: true })}
-              <div class="field">
+              ${field({ label: 'Health path', name: 'healthPath', value: f.healthPath, mono: true, placeholder: '/health' })}
+              <div class="field field-wide">
                 <label class="field-label" for="f-registryId">Registry login</label>
                 <select class="select" id="f-registryId" name="registryId">
                   <option value="">Matched by host, or anonymous</option>
                   ${registries.map((r) => html`<option value="${r.id}"${String(r.id) === f.registryId ? raw(' selected') : ''}>${r.name} (${r.host})</option>`)}
                 </select>
               </div>
-              ${field({ label: 'Health path', name: 'healthPath', value: f.healthPath, mono: true, placeholder: '/health' })}
               ${field({ label: 'Memory limit', name: 'memLimit', value: f.memLimit, mono: true, placeholder: '512m' })}
               ${field({ label: 'Data owner (uid:gid)', name: 'dataOwner', value: f.dataOwner, mono: true, placeholder: '1000:1000', help: 'Set to 1000:1000 for images that run as the node user. Empty: owned by root.' })}`
             : ''}
@@ -506,7 +510,7 @@ export function projectPages(deps: { config: Config; services: Services; view: V
         <h2 class="section-title">Delete project</h2>
         <p class="text-muted t-sm mt-0">Stops the containers and removes the route, files and history. <span class="mono">data/</span> and named volumes are kept unless you tick the box.</p>
         <label class="checkbox"><input type="checkbox" name="deleteData" /> Also delete data/ and named volumes</label>
-        ${field({ label: `Type ${p.name} to confirm`, name: 'confirmName', mono: true, required: true, attrs: `autocomplete="off" spellcheck="false" data-confirm-name="${p.name}"` })}
+        ${field({ label: `Type ${p.name} to confirm`, labelHtml: html`Type <code class="inline">${p.name}</code> to confirm`, name: 'confirmName', mono: true, narrow: true, required: true, attrs: `autocomplete="off" spellcheck="false" data-confirm-name="${p.name}"` })}
         <div class="form-actions"><button class="btn btn-danger" type="submit" data-confirm-target>${icon('trash', 14)}Delete ${p.name}</button><span class="text-muted t-sm">This cannot be undone.</span></div>
       </form>`, opts.error ? 400 : undefined);
   };
@@ -622,6 +626,16 @@ export function lineClass(stream: string, line: string): string {
   if (stream === 'system' && /^(Deploy failed|Could not|No earlier)/.test(line)) return 'log-err';
   if (stream === 'system' && /is live$|serving again$/.test(line)) return 'log-ok';
   return 'log-out';
+}
+
+/** Whether a version has ever gone live, so there is something to restart or stop. */
+function hasLiveVersion(p: Project): boolean {
+  return p.kind === 'image' ? Boolean(p.image?.currentDigest) : p.deployedComposeVersion !== null;
+}
+
+/** "#12 (healthy) 5m ago", kept on one aligned line. */
+function deployRef(d: Deploy, by?: string): Html {
+  return html`<span class="deploy-ref"><a href="/deploys/${d.id}">#${d.id}</a>${pill(d.status, 'deploy')}${ago(d.createdAt)}${by ? html`<span class="text-muted">by ${by}</span>` : ''}</span>`;
 }
 
 function liveVersion(p: Project, long = false): Html {

@@ -32,7 +32,8 @@ export type OidcIdentity = {
   name: string | null;
 };
 
-export const SESSION_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+/** A browser session lasts an hour from login, then the user logs in again. */
+export const SESSION_TTL_MS = 60 * 60 * 1000;
 
 const NOW = `strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`;
 

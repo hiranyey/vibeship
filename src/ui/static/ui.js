@@ -320,6 +320,13 @@
         const u = data.usage;
         const [pMem, pUnit] = fmtBytes(u.memBytes);
         const running = u.containers > 0;
+        // Not running: one quiet card instead of two cards of dashes.
+        const idleCard = panel.querySelector('[data-idle]');
+        if (idleCard) idleCard.hidden = running;
+        for (const key of ['p-cpu', 'p-mem']) {
+          const card = panel.querySelector('[data-tile="' + key + '"]');
+          if (card) card.hidden = !running;
+        }
         tile('p-cpu', running ? num(u.cpuShare) : '—', running ? '%' : '', running ? (u.cpuPercent / 100).toFixed(2) + ' of ' + h.cores + ' cores' : 'not running', u.cpuShare);
         tile('p-mem', running ? pMem : '—', running ? pUnit : '', running ? num(u.memShare) + '% of the VM' : 'not running', u.memShare);
         const byName = new Map(data.containers.map((c) => [c.name, c]));

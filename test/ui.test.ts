@@ -67,7 +67,7 @@ test('API tokens do not open the UI', async (t) => {
 
 test('the dashboard and every page render with security headers', async (t) => {
   const b = browser(t);
-  for (const path of ['/', '/projects/new', '/projects/new?kind=image', '/projects/new?kind=compose', '/settings', '/settings/registries', '/settings/tokens', '/settings/audit']) {
+  for (const path of ['/', '/projects/new', '/projects/new?kind=image', '/projects/new?kind=compose', '/settings', '/registries', '/tokens', '/audit']) {
     const res = await b.get(path);
     assert.equal(res.status, 200, path);
     assert.match(res.headers.get('content-type')!, /text\/html/);
@@ -79,7 +79,7 @@ test('the dashboard and every page render with security headers', async (t) => {
   assert.match(home, /data-metrics="\/api\/metrics"/, 'the dashboard shows the server panel');
   assert.match(home, /data-copy-text="http:\/\/vibeship\.localhost:8080\/mcp"/, 'the MCP URL has a copy button');
   // The topbar shows only the log out button, not the user's name, email or an admin badge.
-  assert.match(home, /<form method="post" action="\/auth\/logout">/);
+  assert.match(home, /<form class="tooltip-wrap" method="post" action="\/auth\/logout">/);
   assert.doesNotMatch(home, /admin@example\.com|class="user-chip"|class="brand-sub"/);
 });
 
@@ -282,57 +282,57 @@ test('settings: update, webhook shown once, stop/start, delete with confirmation
 
 test('tokens are shown once and can be revoked; registries and settings save', async (t) => {
   const b = browser(t);
-  const res = await b.post('/settings/tokens', { name: 'agent', scope: 'deploy', expiresOn: '' });
+  const res = await b.post('/tokens', { name: 'agent', scope: 'deploy', expiresOn: '' });
   assert.equal(res.status, 200);
   const text = await res.text();
   const token = /id="once-value">(vs_[^<]+)</.exec(text)![1]!;
   assert.equal(b.tokens.authenticate(token)?.scope, 'deploy');
   assert.match(text, /claude mcp add --transport http vibeship http:\/\/vibeship\.localhost:8080\/mcp/);
-  assert.doesNotMatch(await (await b.get('/settings/tokens')).text(), new RegExp(token));
+  assert.doesNotMatch(await (await b.get('/tokens')).text(), new RegExp(token));
 
-  const past = await b.post('/settings/tokens', { name: 'old', scope: 'read', expiresOn: '2001-01-01' });
+  const past = await b.post('/tokens', { name: 'old', scope: 'read', expiresOn: '2001-01-01' });
   assert.equal(past.status, 400);
   assert.match(await past.text(), /must be in the future/);
 
   const id = b.tokens.list().find((x) => x.name === 'agent')!.id;
-  assert.match((await b.follow(await b.post(`/settings/tokens/${id}/revoke`))).text, /Revoked agent/);
+  assert.match((await b.follow(await b.post(`/tokens/${id}/revoke`))).text, /Revoked agent/);
   assert.equal(b.tokens.authenticate(token), null);
 
-  const reg = await b.follow(await b.post('/settings/registries', { name: 'RepoFlow', url: 'https://repoflow.example.com', username: 'ci', token: 'tok' }));
+  const reg = await b.follow(await b.post('/registries', { name: 'RepoFlow', url: 'https://repoflow.example.com', username: 'ci', token: 'tok' }));
   assert.match(reg.text, /Added RepoFlow/);
   assert.doesNotMatch(reg.text, /tok</);
-  const half = await b.post('/settings/registries', { name: 'Half', url: 'x.example.com', username: 'ci', token: '' });
+  const half = await b.post('/registries', { name: 'Half', url: 'x.example.com', username: 'ci', token: '' });
   assert.equal(half.status, 400);
 
   const regId = b.registries.list().find((x) => x.name === 'RepoFlow')!.id;
-  const edit = await (await b.get(`/settings/registries/${regId}`)).text();
+  const edit = await (await b.get(`/registries/${regId}`)).text();
   assert.match(edit, /value="https:\/\/repoflow\.example\.com"/);
   assert.match(edit, /Leave blank to keep the current token/);
-  const renamed = await b.follow(await b.post(`/settings/registries/${regId}`, { name: 'Repoflow', url: 'https://api.repoflow.io', username: 'deployer', token: '' }));
+  const renamed = await b.follow(await b.post(`/registries/${regId}`, { name: 'Repoflow', url: 'https://api.repoflow.io', username: 'deployer', token: '' }));
   assert.match(renamed.text, /Saved Repoflow/);
   assert.deepEqual(b.registries.authFor('api.repoflow.io/lib/app:1', null), { host: 'api.repoflow.io', username: 'deployer', password: 'tok' });
-  await b.follow(await b.post(`/settings/registries/${regId}`, { name: 'Repoflow', url: 'https://api.repoflow.io', username: '', token: '' }));
+  await b.follow(await b.post(`/registries/${regId}`, { name: 'Repoflow', url: 'https://api.repoflow.io', username: '', token: '' }));
   assert.equal(b.registries.get(regId).hasToken, false);
-  const noToken = await b.post(`/settings/registries/${regId}`, { name: 'Repoflow', url: 'https://api.repoflow.io', username: 'ci', token: '' });
+  const noToken = await b.post(`/registries/${regId}`, { name: 'Repoflow', url: 'https://api.repoflow.io', username: 'ci', token: '' });
   assert.equal(noToken.status, 400);
   assert.match(await noToken.text(), /token: required/);
-  assert.equal((await b.get('/settings/registries/999')).status, 404);
+  assert.equal((await b.get('/registries/999')).status, 404);
 
   assert.match((await b.follow(await b.post('/settings', { health_timeout_seconds: '120' }))).text, /Settings saved/);
   assert.equal(b.settings.get('health_timeout_seconds'), 120);
   assert.equal((await b.post('/settings', { health_timeout_seconds: '1' })).status, 400);
 
-  const audit = await (await b.get('/settings/audit')).text();
+  const audit = await (await b.get('/audit')).text();
   for (const action of ['token.create', 'token.revoke', 'registry.create', 'registry.update', 'settings.set']) assert.match(audit, new RegExp(action.replace('.', '\\.')));
   assert.match(audit, /admin@example\.com/);
 });
 
 test('cross-origin form posts are refused', async (t) => {
   const b = browser(t);
-  const res = await b.post('/settings/tokens', { name: 'evil', scope: 'admin' }, { origin: 'http://evil.localhost:8080' });
+  const res = await b.post('/tokens', { name: 'evil', scope: 'admin' }, { origin: 'http://evil.localhost:8080' });
   assert.equal(res.status, 403);
   assert.match(await res.text(), /Cross-origin request refused/);
-  const none = await b.post('/settings/tokens', { name: 'evil', scope: 'admin' }, {});
+  const none = await b.post('/tokens', { name: 'evil', scope: 'admin' }, {});
   assert.equal(none.status, 403);
   assert.equal(b.tokens.list().length, 0);
 });

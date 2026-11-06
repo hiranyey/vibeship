@@ -43,6 +43,11 @@ export function hostPanel(): Html {
 /** A project's CPU and memory next to the VM's, for its overview. */
 export function projectPanel(projectId: number): Html {
   return panel(`/api/projects/${projectId}/metrics`, 'project', 'Resource usage', html`
+    <div class="metric-card metric-idle" data-idle hidden>
+      <div class="metric-label">This project</div>
+      <div class="metric-idle-text">Not running</div>
+      <div class="metric-sub">No CPU or memory in use.</div>
+    </div>
     ${tile('p-cpu', 'CPU', 'this project')}
     ${tile('p-mem', 'Memory', 'this project')}
     ${tile('vm-cpu', 'VM CPU', 'whole machine')}

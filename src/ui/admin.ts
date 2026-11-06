@@ -6,7 +6,7 @@ import type { AuditEntry } from '../services/audit.ts';
 import type { Registry } from '../services/registries.ts';
 import type { Services } from '../services/index.ts';
 import { readForm } from './projects.ts';
-import { ago, alert, copyButton, emptyRow, field, type Html, pageHeader, postButton, shownOnce, type View } from './view.ts';
+import { ago, alert, copyButton, emptyRow, field, type Html, pageHeader, pill, postButton, shownOnce, type View } from './view.ts';
 
 const PAGE = 50;
 
@@ -21,7 +21,15 @@ export function adminPages(deps: { services: Services; view: View }): Hono<AppEn
   const { services: s, view } = deps;
   const app = new Hono<AppEnv>();
   const ctx = (c: Context<AppEnv>) => principal(c).ctx;
-  const crumbs = (label: string) => [{ label: 'Settings', href: '/settings' }, { label }];
+  const crumbs = (label: string) => [{ label }];
+
+  // These pages used to live under /settings; keep old bookmarks working.
+  for (const page of ['registries', 'tokens', 'audit']) {
+    app.get(`/settings/${page}`, (c) => {
+      const q = new URL(c.req.url).search;
+      return c.redirect(`/${page}${q}`, 301);
+    });
+  }
 
   // Registries
 
@@ -41,11 +49,11 @@ export function adminPages(deps: { services: Services; view: View }): Hono<AppEn
                   <div class="empty-title">No registries</div>
                   <p>Public images need none. Add one below to pull private images with a read-only token.</p>
                 </div>`)
-              : list.map((r) => html`<tr><td class="cell-name">${r.name}</td><td class="cell-mono">${r.host}</td><td class="cell-mono">${r.url}</td><td>${r.username ? html`<span class="mono">${r.username}</span> · token set` : 'anonymous'}</td><td class="cell-actions"><a class="btn btn-ghost btn-sm" href="/settings/registries/${r.id}">Edit</a></td></tr>`)}</tbody>
+              : list.map((r) => html`<tr><td class="cell-name">${r.name}</td><td class="cell-mono">${r.host}</td><td class="cell-mono">${r.url}</td><td>${r.username ? html`<span class="mono">${r.username}</span> · token set` : 'anonymous'}</td><td class="cell-actions"><a class="btn btn-ghost btn-sm" href="/registries/${r.id}">Edit</a></td></tr>`)}</tbody>
           </table>
         </div>
         ${error ? alert('danger', error, 'Not added') : ''}
-        <form class="card card-pad form-stack" method="post" action="/settings/registries">
+        <form class="card card-pad form-stack" method="post" action="/registries">
           <h2 class="section-title">Add a registry</h2>
           <div class="form-grid">
             ${field({ label: 'Name', name: 'name', value: f.name, required: true, placeholder: 'RepoFlow' })}
@@ -58,14 +66,14 @@ export function adminPages(deps: { services: Services; view: View }): Hono<AppEn
     });
   };
 
-  app.get('/settings/registries', (c) => registriesPage(c));
-  app.post('/settings/registries', async (c) => {
+  app.get('/registries', (c) => registriesPage(c));
+  app.post('/registries', async (c) => {
     const f = await readForm(c);
     try {
       const r = s.registries.create(ctx(c), {
         name: f.name, url: f.url, username: f.username?.trim() || null, token: f.token || null,
       });
-      return view.redirect(c, '/settings/registries', 'success', `Added ${r.name}.`);
+      return view.redirect(c, '/registries', 'success', `Added ${r.name}.`);
     } catch (err) {
       return registriesPage(c, f, message(err));
     }
@@ -83,10 +91,10 @@ export function adminPages(deps: { services: Services; view: View }): Hono<AppEn
       title: `Edit ${r.name}`,
       nav: 'registries',
       status: error ? 400 : 200,
-      crumbs: [{ label: 'Settings', href: '/settings' }, { label: 'Registries', href: '/settings/registries' }, { label: r.name }],
+      crumbs: [{ label: 'Registries', href: '/registries' }, { label: r.name }],
       body: html`${pageHeader(`Edit ${r.name}`, 'Changes apply to the next pull. Projects that name this registry keep using it.')}
         ${error ? alert('danger', error, 'Not saved') : ''}
-        <form class="card card-pad form-stack" method="post" action="/settings/registries/${r.id}">
+        <form class="card card-pad form-stack" method="post" action="/registries/${r.id}">
           <div class="form-grid">
             ${field({ label: 'Name', name: 'name', value: v.name, required: true })}
             ${field({ label: 'URL', name: 'url', value: v.url, required: true, mono: true })}
@@ -97,20 +105,20 @@ export function adminPages(deps: { services: Services; view: View }): Hono<AppEn
               attrs: 'autocomplete="new-password"',
             })}
           </div>
-          <div class="form-actions"><button class="btn btn-primary" type="submit">Save</button><a class="btn btn-ghost" href="/settings/registries">Cancel</a></div>
+          <div class="form-actions"><button class="btn btn-primary" type="submit">Save</button><a class="btn btn-ghost" href="/registries">Cancel</a></div>
         </form>`,
     });
   };
 
-  app.get('/settings/registries/:id', (c) => editRegistryPage(c, registryById(c)));
-  app.post('/settings/registries/:id', async (c) => {
+  app.get('/registries/:id', (c) => editRegistryPage(c, registryById(c)));
+  app.post('/registries/:id', async (c) => {
     const r = registryById(c);
     const f = await readForm(c);
     try {
       const updated = s.registries.update(ctx(c), r.id, {
         name: f.name, url: f.url, username: f.username?.trim() || null, token: f.token || undefined,
       });
-      return view.redirect(c, '/settings/registries', 'success', `Saved ${updated.name}.`);
+      return view.redirect(c, '/registries', 'success', `Saved ${updated.name}.`);
     } catch (err) {
       return editRegistryPage(c, r, f, message(err));
     }
@@ -149,14 +157,14 @@ export function adminPages(deps: { services: Services; view: View }): Hono<AppEn
                   <td>${ago(t.createdAt)}</td>
                   <td>${ago(t.lastUsedAt)}</td>
                   <td>${t.expiresAt ? ago(t.expiresAt) : html`<span class="text-subtle">never</span>`}</td>
-                  <td>${state}</td>
-                  <td class="cell-actions">${state === 'active' ? postButton(`/settings/tokens/${t.id}/revoke`, 'Revoke', { cls: 'btn-ghost btn-sm', confirm: `Revoke ${t.name}? Anything using it stops working at once.` }) : ''}</td>
+                  <td>${pill(state === 'active' ? 'healthy' : 'stopped', 'project', state)}</td>
+                  <td class="cell-actions">${state === 'active' ? postButton(`/tokens/${t.id}/revoke`, 'Revoke', { cls: 'btn-ghost-danger btn-sm', confirm: `Revoke ${t.name}? Anything using it stops working at once.` }) : ''}</td>
                 </tr>`;
               })}</tbody>
           </table>
         </div>
         ${extra.error ? alert('danger', extra.error, 'Not created') : ''}
-        <form class="card card-pad form-stack" method="post" action="/settings/tokens">
+        <form class="card card-pad form-stack" method="post" action="/tokens">
           <h2 class="section-title">New token</h2>
           <div class="form-grid">
             ${field({ label: 'Name', name: 'name', value: f.name, required: true, placeholder: 'claude-code laptop' })}
@@ -173,8 +181,8 @@ export function adminPages(deps: { services: Services; view: View }): Hono<AppEn
     });
   };
 
-  app.get('/settings/tokens', (c) => tokensPage(c));
-  app.post('/settings/tokens', async (c) => {
+  app.get('/tokens', (c) => tokensPage(c));
+  app.post('/tokens', async (c) => {
     const f = await readForm(c);
     try {
       const expiresOn = f.expiresOn?.trim();
@@ -187,20 +195,20 @@ export function adminPages(deps: { services: Services; view: View }): Hono<AppEn
       return tokensPage(c, { error: message(err), form: f });
     }
   });
-  app.post('/settings/tokens/:id/revoke', (c) => {
+  app.post('/tokens/:id/revoke', (c) => {
     const id = Number(c.req.param('id'));
     try {
       if (!Number.isInteger(id) || id < 1) throw new AppError('not_found', 'Token not found');
       const t = s.tokens.revoke(ctx(c), id);
-      return view.redirect(c, '/settings/tokens', 'success', `Revoked ${t.name}.`);
+      return view.redirect(c, '/tokens', 'success', `Revoked ${t.name}.`);
     } catch (err) {
-      return view.redirect(c, '/settings/tokens', 'danger', message(err));
+      return view.redirect(c, '/tokens', 'danger', message(err));
     }
   });
 
   // Audit log
 
-  app.get('/settings/audit', (c) => {
+  app.get('/audit', (c) => {
     const before = Number(c.req.query('before') ?? '') || undefined;
     const entries = s.audit.list({ limit: PAGE, beforeId: before });
     const who = actorNames(s);
@@ -228,8 +236,8 @@ export function adminPages(deps: { services: Services; view: View }): Hono<AppEn
           </table>
         </div>
         <div class="row">
-          ${before ? html`<a class="btn btn-secondary btn-sm" href="/settings/audit">Newest</a>` : ''}
-          ${entries.length === PAGE ? html`<a class="btn btn-secondary btn-sm" href="/settings/audit?before=${entries.at(-1)!.id}">Older</a>` : ''}
+          ${before ? html`<a class="btn btn-secondary btn-sm" href="/audit">Newest</a>` : ''}
+          ${entries.length === PAGE ? html`<a class="btn btn-secondary btn-sm" href="/audit?before=${entries.at(-1)!.id}">Older</a>` : ''}
         </div>`,
     });
   });
@@ -246,20 +254,12 @@ export function adminPages(deps: { services: Services; view: View }): Hono<AppEn
       <form class="card card-pad form-stack" method="post" action="/settings">
         <h2 class="section-title">Deploys</h2>
         ${field({
-          label: 'Health check timeout (seconds)', name: 'health_timeout_seconds', type: 'number', required: true,
+          label: 'Health check timeout (seconds)', name: 'health_timeout_seconds', type: 'number', required: true, narrow: true,
           value: value ?? s.settings.get('health_timeout_seconds'),
           help: 'How long a new version has to become healthy before the deploy fails and the last healthy version comes back.',
         })}
         <div class="form-actions"><button class="btn btn-primary" type="submit">Save</button></div>
-      </form>
-      <div class="card card-pad">
-        <h2 class="section-title">Elsewhere</h2>
-        <ul class="t-sm">
-          <li><a href="/settings/registries">Registries</a> for private images</li>
-          <li><a href="/settings/tokens">API tokens</a> for CI scripts and MCP agents</li>
-          <li><a href="/settings/audit">Audit log</a></li>
-        </ul>
-      </div>`,
+      </form>`,
   });
 
   app.get('/settings', (c) => settingsPage(c));

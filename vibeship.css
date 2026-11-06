@@ -392,6 +392,14 @@ h1, h2, h3, .t-xl, .t-2xl, .brand-title, .card-title, .modal-title, .section-tit
 }
 .btn-ghost:hover { background: var(--bg-muted); border-color: var(--bg-muted); }
 
+/* Quiet, but reads as destructive: Revoke, Remove. */
+.btn-ghost-danger {
+  background: transparent;
+  border-color: transparent;
+  color: var(--danger);
+}
+.btn-ghost-danger:hover { background: var(--danger-subtle); border-color: var(--danger-subtle); }
+
 .btn-danger {
   background: var(--danger);
   border-color: var(--danger);
@@ -572,7 +580,7 @@ h1, h2, h3, .t-xl, .t-2xl, .brand-title, .card-title, .modal-title, .section-tit
   flex: 1 1 120px;
   min-width: 110px;
   padding: var(--space-3);
-  border: var(--border-width-key) solid var(--border);
+  border: var(--border-width) solid var(--border-subtle);
   border-radius: var(--radius-md);
   background: var(--bg);
   overflow: hidden;
@@ -588,6 +596,9 @@ h1, h2, h3, .t-xl, .t-2xl, .brand-title, .card-title, .modal-title, .section-tit
   font-weight: var(--weight-bold);
   line-height: var(--leading-tight);
 }
+/* A count that needs attention, e.g. failed projects. */
+.stat-alert { border-color: var(--danger); background: var(--danger-subtle); }
+.stat-alert .stat-label, .stat-alert .stat-value { color: var(--danger); }
 
 /* ——— Table ——— */
 .table-wrap {
@@ -1042,6 +1053,8 @@ code.inline {
 .tooltip-wrap:hover .tooltip,
 .tooltip-wrap:focus-within .tooltip { opacity: 1; }
 .tooltip-right { left: calc(100% + 10px); bottom: auto; top: 50%; transform: translateY(-50%); font-weight: var(--weight-regular); }
+/* Below the trigger, right-aligned: for controls at the top-right edge. */
+.tooltip-below { top: calc(100% + 8px); bottom: auto; left: auto; right: 0; transform: none; }
 
 /* ——— Icons ——— */
 .icon { display: block; flex-shrink: 0; }
@@ -1301,6 +1314,12 @@ a.tab { text-decoration: none; display: inline-block; }
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: var(--space-3) var(--space-4);
 }
+/* Long values (image refs, the registry list) get two columns once there are at least three. */
+@media (min-width: 900px) {
+  .form-grid > .field-wide { grid-column: span 2; }
+}
+/* Short values (numbers, a name to confirm) don't need the full row. */
+.input-narrow { max-width: 280px; }
 .form-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; margin-top: var(--space-3); }
 .form-stack { display: flex; flex-direction: column; gap: var(--space-3); }
 .kind-choice { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--space-3); }
@@ -1308,6 +1327,8 @@ a.tab { text-decoration: none; display: inline-block; }
 .kind-choice a:hover .card { border-color: var(--accent); }
 .danger-zone { border-color: var(--danger); }
 .log-body.log-tall { max-height: 560px; min-height: 160px; }
+/* A finished log won't grow, so it needs no room held open. */
+.log-viewer:not([data-stream]) .log-body.log-tall { min-height: 0; }
 .log-line .log-ts:empty { display: none; }
 .log-line.no-ts { grid-template-columns: 36px 1fr; }
 .pre-yaml { max-height: 520px; overflow: auto; }
@@ -1361,6 +1382,12 @@ a.tab { text-decoration: none; display: inline-block; }
 .copy-btn.is-copied .copy-icon { display: none; }
 .copy-btn.is-copied .check-icon { display: block; animation: pop var(--motion-fast) var(--ease-out); }
 .props-val .copyable .mono { font-size: var(--text-sm); font-weight: var(--weight-regular); }
+/* Copy buttons sit inside the line instead of making their row taller. */
+.props .copy-btn, .page-subtitle .copy-btn { margin-block: -4px; }
+.props { align-items: baseline; }
+.page-subtitle .badge { vertical-align: middle; }
+/* "#12 (healthy) 5m ago" on one aligned line. */
+.deploy-ref { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px var(--space-2); }
 
 .filter-bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); }
 .filter-search { flex: 1 1 240px; max-width: 360px; }
@@ -1430,11 +1457,14 @@ a.tab { text-decoration: none; display: inline-block; }
   flex-direction: column;
   gap: 4px;
   padding: var(--space-3);
-  border: var(--border-width-key) solid var(--border);
+  border: var(--border-width) solid var(--border-subtle);
   border-radius: var(--radius-md);
   background: var(--bg);
   min-width: 0;
 }
+/* Stands in for the CPU and memory cards while a project isn't running. */
+.metric-idle { border-style: dashed; background: var(--bg-muted); }
+.metric-idle-text { font-size: var(--text-lg); font-weight: var(--weight-semibold); color: var(--text-muted); line-height: var(--leading-tight); }
 .metric-label { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-muted); }
 .metric-value { display: flex; align-items: baseline; gap: 4px; font-size: var(--text-2xl); font-weight: var(--weight-bold); line-height: var(--leading-tight); font-variant-numeric: tabular-nums; }
 .metric-unit { font-size: var(--text-base); font-weight: var(--weight-semibold); color: var(--text-muted); }
@@ -1492,8 +1522,6 @@ a.tab { text-decoration: none; display: inline-block; }
   .breadcrumb > a:nth-last-child(3) { flex-shrink: 1; min-width: 2ch; overflow: hidden; text-overflow: ellipsis; }
   .breadcrumb-current { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .topbar-right { flex-shrink: 0; }
-  .topbar-logout { padding: 8px; }
-  .topbar-logout .btn-label { display: none; }
 
   /* The sidebar becomes a bottom tab bar. */
   .sidebar {
