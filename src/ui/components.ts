@@ -93,7 +93,7 @@ export function statusBadge(status: string, opts: { kind?: 'project' | 'deploy';
  * something powerful (admin scope); danger tone marks only destructive
  * actions in the audit log, never a scope.
  */
-export function tag(text: string, opts: { tone?: 'neutral' | 'warning' | 'danger'; title?: string } = {}): Html {
+export function tag(text: string, opts: { tone?: 'neutral' | 'warning' | 'danger' | 'info'; title?: string } = {}): Html {
   return html`<span class="tag${opts.tone && opts.tone !== 'neutral' ? ` tone-${opts.tone}` : ''}"${opts.title ? html` title="${opts.title}"` : ''}>${text}</span>`;
 }
 
@@ -133,12 +133,18 @@ export function imageVersion(imageRef: string | undefined, digest: string | null
 
 /** A link that opens in a new tab, marked with an icon. */
 export function externalLink(href: string, text: string): Html {
-  return html`<a class="ext-link" href="${href}" target="_blank" rel="noopener noreferrer">${text}${icon('external', 12)}<span class="sr-only"> (opens in a new tab)</span></a>`;
+  return html`<a class="ext-link" href="${href}" target="_blank" rel="noopener noreferrer">${text}${icon('external', 14)}<span class="sr-only"> (opens in a new tab)</span></a>`;
 }
 
 // ——— Buttons ———
 
-export type ButtonVariant = 'primary' | 'secondary' | 'danger' | 'ghost';
+/**
+ * primary (orange), secondary (outline), danger (red outline: Stop…),
+ * danger-solid (Delete project…), ghost-danger (a row's Revoke…/Remove…),
+ * ghost (Cancel).
+ */
+export type ButtonVariant = 'primary' | 'secondary' | 'danger' | 'danger-solid' | 'ghost-danger' | 'ghost';
+const DANGER: ButtonVariant[] = ['danger', 'danger-solid', 'ghost-danger'];
 
 /** What the ConfirmDialog asks before a form posts. */
 export type Confirm = { title: string; body: string; action: string; tone?: 'danger' | 'default' };
@@ -166,7 +172,8 @@ export function postButton(action: string, label: string, opts: {
   variant?: ButtonVariant; size?: 'sm' | 'lg'; icon?: IconName; hidden?: Record<string, string>;
   destructive?: Omit<Confirm, 'tone'>; confirm?: Confirm; disabledReason?: string;
 } = {}): Html {
-  const variant = opts.destructive ? 'danger' : opts.variant;
+  // Destructive actions are always one of the danger styles.
+  const variant = opts.destructive ? (opts.variant && DANGER.includes(opts.variant) ? opts.variant : 'danger') : opts.variant;
   const confirm = opts.destructive ? { ...opts.destructive, tone: 'danger' as const } : opts.confirm;
   return html`<form class="inline-form" method="post" action="${action}"${confirmAttrs(confirm)}>${
     Object.entries(opts.hidden ?? {}).map(([k, v]) => html`<input type="hidden" name="${k}" value="${v}" />`)
@@ -199,7 +206,7 @@ export function drawer(opts: { id: string; title: string; open?: boolean; wide?:
   return html`<dialog class="drawer${opts.wide ? ' is-wide' : ''}" id="${opts.id}" aria-labelledby="${opts.id}-title"${opts.open ? raw(' open data-autoopen') : ''}>
     <div class="drawer-head">
       <h2 class="drawer-title" id="${opts.id}-title">${opts.title}</h2>
-      <a class="btn btn-ghost btn-icon" href="${opts.closeHref}" data-drawer-close aria-label="Close">${icon('close', 16)}</a>
+      <a class="btn-icon" href="${opts.closeHref}" data-drawer-close aria-label="Close">${icon('close', 18)}</a>
     </div>
     <div class="drawer-body">${opts.body}</div>
   </dialog>`;
@@ -208,8 +215,8 @@ export function drawer(opts: { id: string; title: string; open?: boolean; wide?:
 // ——— PageHeader and containers ———
 
 /** Title (with an optional status), a description, and the primary action at top right. Breadcrumbs live in the top bar. */
-export function pageHeader(title: Html | string, description?: Html | string, actions?: Html): Html {
-  return html`<header class="page-header">
+export function pageHeader(title: Html | string, description?: Html | string, actions?: Html, opts: { project?: boolean } = {}): Html {
+  return html`<header class="page-header${opts.project ? ' is-project' : ''}">
     <div class="page-header-text">
       <h1 class="t-xl page-title">${title}</h1>
       ${description ? html`<div class="page-description">${description}</div>` : ''}
@@ -245,10 +252,19 @@ export type Column = string | { label: string; cls?: string; srOnly?: boolean };
 export const ACTIONS: Column = { label: 'Actions', cls: 'cell-actions', srOnly: true };
 
 /** A table in its bordered wrapper, headers in the label role. */
-export function dataTable(opts: { id?: string; head: Column[]; body: Html | Html[]; compact?: boolean; caption?: string }): Html {
-  return html`<div class="table-wrap">
-    <table class="table${opts.compact ? ' table-compact' : ''}"${opts.id ? html` id="${opts.id}"` : ''}>
+export function dataTable(opts: {
+  id?: string; head: Column[]; body: Html | Html[]; compact?: boolean; caption?: string;
+  /** Extra class on the table, e.g. a fixed layout. */
+  tableClass?: string;
+  /** Column widths, as `<col>` classes. */
+  cols?: string[];
+  /** A quieter, thin-bordered wrapper for secondary tables (revoked tokens). */
+  quiet?: boolean;
+}): Html {
+  return html`<div class="${opts.quiet ? 'panel-quiet' : 'table-wrap'}">
+    <table class="table${opts.compact ? ' table-compact' : ''}${opts.tableClass ? ` ${opts.tableClass}` : ''}"${opts.id ? html` id="${opts.id}"` : ''}>
       ${opts.caption ? html`<caption class="sr-only">${opts.caption}</caption>` : ''}
+      ${opts.cols ? html`<colgroup>${opts.cols.map((c) => html`<col class="${c}" />`)}</colgroup>` : ''}
       <thead><tr>${opts.head.map((col) => {
         const c = typeof col === 'string' ? { label: col } : col;
         return html`<th scope="col"${c.cls ? html` class="${c.cls}"` : ''}>${c.srOnly ? html`<span class="sr-only">${c.label}</span>` : c.label}</th>`;
@@ -282,8 +298,8 @@ type FieldBase = {
   name: string;
   help?: Html | string;
   error?: string;
-  /** Columns in the 4-column form grid; default 2. */
-  span?: 1 | 2 | 3 | 4;
+  /** Columns in the 12-column form grid; default 6. */
+  span?: 2 | 3 | 4 | 6 | 8 | 9 | 12;
   /** Label markup, when it needs more than plain text. */
   labelHtml?: Html;
   /** Element id, when two forms on a page share field names; default `f-<name>`. */
@@ -293,7 +309,7 @@ type FieldBase = {
 };
 
 function fieldWrap(o: FieldBase, id: string, control: Html): Html {
-  return html`<div class="field${o.span && o.span !== 2 ? ` span-${o.span}` : ''}">
+  return html`<div class="field${o.span && o.span !== 6 ? ` span-${o.span}` : ''}">
     <label class="field-label" for="${id}">${o.labelHtml ?? o.label}</label>
     ${control}
     ${o.after ?? ''}
@@ -316,6 +332,7 @@ export function field(o: FieldBase & {
   type?: string;
   placeholder?: string;
   required?: boolean;
+  /** False for inputs that hold words (a name, a note); default mono. */
   mono?: boolean;
   narrow?: boolean;
   /** Extra attributes, trusted markup. */
@@ -323,11 +340,12 @@ export function field(o: FieldBase & {
 }): Html {
   const id = o.id ?? `f-${o.name}`;
   const type = o.type ?? 'text';
-  const mono = o.mono ?? type === 'number';
-  const input = html`<input class="input${mono ? ' input-mono' : ''}${o.narrow ? ' input-narrow' : ''}" id="${id}" name="${o.name}" type="${type}"
+  // Inputs hold machine values (mono) unless told they hold words.
+  const words = o.mono === false;
+  const input = html`<input class="input${words ? ' input-ui' : ''}${o.narrow ? ' input-narrow' : ''}" id="${id}" name="${o.name}" type="${type}"
       value="${o.value ?? ''}"${o.placeholder ? html` placeholder="${o.placeholder}"` : ''}${o.required ? raw(' required') : ''}${described(o, id)}${o.attrs ? raw(` ${o.attrs}`) : ''} />`;
   const control = type === 'password'
-    ? html`<div class="input-group">${input}<button class="btn" type="button" data-reveal="${id}" aria-pressed="false" aria-label="Show ${o.label.toLowerCase()}">${icon('eye', 16)}${icon('eye-off', 16)}</button></div>`
+    ? html`<div class="input-group">${input}<button class="btn-icon" type="button" data-reveal="${id}" aria-pressed="false" aria-label="Show ${o.label.toLowerCase()}">${icon('eye', 18)}${icon('eye-off', 18)}</button></div>`
     : input;
   return fieldWrap(o, id, control);
 }
@@ -342,14 +360,14 @@ export function selectField(o: FieldBase & { value?: string; options: Array<{ va
 /** A textarea; `code` for YAML and KEY=value lines (mono, tinted). */
 export function textarea(o: FieldBase & { value?: string | null; code?: boolean; rows?: number; placeholder?: string; required?: boolean }): Html {
   const id = o.id ?? `f-${o.name}`;
-  return fieldWrap(o, id, html`<textarea class="textarea${o.code ? ' textarea-code' : ''}" id="${id}" name="${o.name}" rows="${o.rows ?? 6}" spellcheck="false"${
+  return fieldWrap(o, id, html`<textarea class="textarea${o.code ? ' textarea-code' : ' input-ui'}" id="${id}" name="${o.name}" rows="${o.rows ?? 6}" spellcheck="false"${
     o.placeholder ? html` placeholder="${o.placeholder}"` : ''
   }${o.required ? raw(' required') : ''}${described(o, id)}>${o.value ?? ''}</textarea>`);
 }
 
 /** Radio cards: each option with a one-line description. */
-export function choiceGroup(o: { legend: string; name: string; value: string; options: Array<{ value: string; title: string; desc: string }>; span?: 1 | 2 | 3 | 4; mono?: boolean }): Html {
-  return html`<fieldset class="choice-group${o.span && o.span !== 2 ? ` span-${o.span}` : ''}">
+export function choiceGroup(o: { legend: string; name: string; value: string; options: Array<{ value: string; title: string; desc: string }>; span?: FieldBase['span']; mono?: boolean }): Html {
+  return html`<fieldset class="choice-group${o.span && o.span !== 6 ? ` span-${o.span}` : ''}">
     <legend class="field-label">${o.legend}</legend>
     ${o.options.map((opt) => html`<label class="choice">
       <input type="radio" name="${o.name}" value="${opt.value}"${opt.value === o.value ? raw(' checked') : ''} />
@@ -359,6 +377,15 @@ export function choiceGroup(o: { legend: string; name: string; value: string; op
   </fieldset>`;
 }
 
-export function checkbox(label: string, name: string, checked = false): Html {
-  return html`<label class="checkbox"><input type="checkbox" name="${name}"${checked ? raw(' checked') : ''} /> ${label}</label>`;
+export function checkbox(label: Html | string, name: string, checked = false, opts: { danger?: boolean } = {}): Html {
+  return html`<label class="checkbox${opts.danger ? ' is-danger' : ''}"><input type="checkbox" name="${name}"${checked ? raw(' checked') : ''} /><span>${label}</span></label>`;
+}
+
+/** Radio chips: one of a few presets (token expiry). */
+export function presetGroup(o: { legend: string; name: string; value: string; options: Array<{ value: string; label: string }>; span?: FieldBase['span']; after?: Html }): Html {
+  return html`<fieldset class="presets-field${o.span && o.span !== 6 ? ` span-${o.span}` : ''}">
+    <legend class="field-label">${o.legend}</legend>
+    <div class="presets">${o.options.map((opt) => html`<label class="preset"><input type="radio" name="${o.name}" value="${opt.value}"${opt.value === o.value ? raw(' checked') : ''} /><span class="chip">${opt.label}</span></label>`)}</div>
+    ${o.after ?? ''}
+  </fieldset>`;
 }

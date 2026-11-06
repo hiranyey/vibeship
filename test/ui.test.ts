@@ -80,7 +80,7 @@ test('the dashboard and every page render with security headers', async (t) => {
   assert.match(home, /data-copy-text="http:\/\/vibeship\.localhost:8080\/mcp"/, 'the MCP URL has a copy button');
   // The topbar has a user menu with the signed-in email and Log out; breadcrumbs start next to the logo.
   assert.match(home, /<details class="user-menu">[\s\S]*admin@example\.com[\s\S]*<form method="post" action="\/auth\/logout">/);
-  assert.match(home, /<nav class="breadcrumb" aria-label="Breadcrumb"><span class="breadcrumb-current" aria-current="page">Projects<\/span>/);
+  assert.match(home, /<nav class="breadcrumb" aria-label="Breadcrumb"><span class="breadcrumb-sep" aria-hidden="true">\/<\/span><span class="breadcrumb-current" aria-current="page">Projects<\/span>/);
   // One confirm dialog for destructive actions, and no stat cards duplicating the filter chips.
   assert.match(home, /<dialog class="modal" id="confirm-dialog"/);
   assert.doesNotMatch(home, /class="stat-strip"/);
@@ -94,7 +94,7 @@ test('static assets are served', async (t) => {
   const css = await b.app.request('/static/vibeship.css');
   assert.equal(css.status, 200);
   assert.match(css.headers.get('content-type')!, /text\/css/);
-  assert.match(await css.text(), /--accent: #e85d04/);
+  assert.match(await css.text(), /--accent: #D9692B/);
   const js = await b.app.request('/static/ui.js');
   assert.match(js.headers.get('content-type')!, /javascript/);
   assert.match(await js.text(), /EventSource/);
@@ -248,7 +248,7 @@ test('settings: update, webhook shown once, stop/start, delete with confirmation
 
   const page = await (await b.get('/projects/hello/settings')).text();
   assert.match(page, /Data owner \(uid:gid\)/);
-  assert.match(page, /Set to 1000:1000 for images that run as the node user/);
+  assert.match(page, /Use 1000:1000 for images that run as the node user/);
   await b.follow(await b.post('/projects/hello/settings', { hostname: 'hi.localhost', imageRef: REF, containerPort: '9090', healthPath: '/up', dataOwner: '1000:1000' }));
   assert.equal(b.projects.getByName('hello').image!.dataOwner, '1000:1000');
   assert.match(await (await b.get('/projects/hello/settings')).text(), /id="f-dataOwner" name="dataOwner" type="text"\s+value="1000:1000"/);
@@ -295,6 +295,17 @@ test('tokens are shown once and can be revoked; registries and settings save', a
   assert.equal(b.tokens.authenticate(token)?.scope, 'deploy');
   assert.match(text, /claude mcp add --transport http vibeship http:\/\/vibeship\.localhost:8080\/mcp/);
   assert.doesNotMatch(await (await b.get('/tokens')).text(), new RegExp(token));
+
+  // Expiry presets: a number of days, never, or a custom date that must be picked.
+  const in30 = await b.post('/tokens', { name: 'thirty', scope: 'read', expiry: '30' });
+  assert.equal(in30.status, 200);
+  const thirty = b.tokens.list().find((x) => x.name === 'thirty')!;
+  assert.equal(thirty.expiresAt!.slice(0, 10), new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10));
+  await b.post('/tokens', { name: 'forever', scope: 'read', expiry: 'none', expiresOn: '2099-01-01' });
+  assert.equal(b.tokens.list().find((x) => x.name === 'forever')!.expiresAt, null, 'Never wins over a stale date');
+  const noDate = await b.post('/tokens', { name: 'custom', scope: 'read', expiry: 'custom', expiresOn: '' });
+  assert.equal(noDate.status, 400);
+  assert.match(await noDate.text(), /id="f-expiresOn-error">Pick a date/);
 
   const past = await b.post('/tokens', { name: 'old', scope: 'read', expiresOn: '2001-01-01' });
   assert.equal(past.status, 400);
@@ -405,8 +416,8 @@ test('names over raw IDs, revoked tokens apart, audit sentences and filters, Sav
   const overview = await (await b.get('/projects/hello')).text();
   assert.match(overview, new RegExp(`by <a href="/tokens#token-${tokenId}" title="token:${tokenId}">ci-bot</a>`));
   assert.doesNotMatch(overview, /by token:\d/);
-  assert.match(overview, /No health path, healthy while the container runs/);
-  assert.match(overview, /No limit: this app can use all of the VM/);
+  assert.match(overview, /No health path\. Healthy while the container stays up\./);
+  assert.match(overview, /<a class="status tone-warning" href="\/projects\/hello\/settings#f-memLimit">[^<]*<span[^>]*><\/span>No limit<\/a>/);
   assert.match(overview, /href="\/projects\/hello\/settings#webhook">Create one/);
   // The hostname shows once, in the header, with a copy button.
   assert.equal(overview.match(/>hello\.localhost</g)?.length, 1);
@@ -425,12 +436,15 @@ test('names over raw IDs, revoked tokens apart, audit sentences and filters, Sav
 
   // The audit log reads as sentences, with danger for destructive actions.
   const audit = await (await b.get('/audit')).text();
-  assert.match(audit, /<th colspan="5" scope="colgroup">Today<\/th>/);
-  assert.match(audit, /Created image project <a href="\/projects\/hello" title="project:\d+"><strong>hello<\/strong><\/a> at <span class="mono">hello\.localhost<\/span>/);
-  assert.match(audit, /<span class="tag tone-danger">token\.revoke<\/span>/);
-  assert.match(audit, /<details class="raw"><summary>Raw<\/summary>/);
-  const onlyRevokes = await (await b.get('/audit?action=token.revoke&hideAuth=1')).text();
-  assert.match(onlyRevokes, /token\.revoke/);
-  assert.doesNotMatch(onlyRevokes, /tag">project\.create</);
-  assert.match(onlyRevokes, /<option value="token\.revoke" selected>/);
+  assert.match(audit, /<th colspan="5" scope="colgroup">Today<span class="group-count">\d+ events<\/span><\/th>/);
+  assert.match(audit, /Created image project <a href="\/projects\/hello" title="project:\d+"><strong>hello<\/strong><\/a><\/span><span class="tag">project\.create<\/span><\/div>\s*<div class="event-sub">hello\.localhost<\/div>/);
+  assert.match(audit, /<tr class="is-destructive">[\s\S]*?<span class="tag tone-danger">token\.revoke<\/span>/);
+  assert.match(audit, /data-toggle-row="raw-\d+"[^>]*>Details<\/button>/);
+  assert.match(audit, /Showing \d+ of \d+ events/);
+  const tokensOnly = await (await b.get('/audit?category=tokens&hideAuth=1')).text();
+  assert.match(tokensOnly, /token\.revoke/);
+  assert.doesNotMatch(tokensOnly, /tag">project\.create</);
+  assert.match(tokensOnly, /<option value="tokens" selected>/);
+  assert.match(await (await b.get('/audit?q=ci-bot')).text(), /Created deploy token/);
+  assert.doesNotMatch(await (await b.get('/audit?q=no-such-thing')).text(), /group-row/);
 });

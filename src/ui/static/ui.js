@@ -286,7 +286,10 @@
   // <form data-autosubmit>: a filter form that applies as soon as a choice changes.
   for (const form of document.querySelectorAll('form[data-autosubmit]')) {
     form.addEventListener('change', (e) => {
-      if (e.target.matches('select, input[type="checkbox"], input[type="date"]')) form.requestSubmit();
+      const t = e.target;
+      if (t.matches('[data-range]') && t.value === 'custom') return; // pick the dates first
+      if (t.matches('input[type="date"]') && !t.form.querySelector('[data-range-custom] input:invalid') && [...t.form.querySelectorAll('[data-range-custom] input')].some((d) => !d.value)) return;
+      if (t.matches('select, input[type="checkbox"], input[type="date"]')) form.requestSubmit();
     });
   }
 
@@ -349,33 +352,57 @@
     btn.setAttribute('aria-label', btn.getAttribute('aria-label').replace(/^(Show|Hide)/, show ? 'Hide' : 'Show'));
   });
 
-  // ——— Expiry presets: <button data-expiry-days="30" data-expiry-for="input-id"> ———
+  // ——— Token expiry: radio chips (7/30/90 days, custom, never) and a hint that follows ———
 
-  for (const btn of document.querySelectorAll('[data-expiry-days]')) {
-    const input = document.getElementById(btn.dataset.expiryFor);
-    if (!input) continue;
-    btn.addEventListener('click', () => {
-      const days = Number(btn.dataset.expiryDays);
-      input.value = days > 0 ? new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10) : '';
-      for (const b of document.querySelectorAll('[data-expiry-for="' + input.id + '"]')) b.setAttribute('aria-pressed', String(b === btn));
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-    });
-    input.addEventListener('change', () => {
-      for (const b of document.querySelectorAll('[data-expiry-for="' + input.id + '"]')) b.setAttribute('aria-pressed', 'false');
-    });
+  for (const group of document.querySelectorAll('[data-expiry]')) {
+    const custom = group.querySelector('[data-expiry-custom]');
+    const date = custom?.querySelector('input');
+    const hint = group.querySelector('[data-expiry-hint]');
+    const fmt = (d) => d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+    const sync = () => {
+      const pick = group.querySelector('input[name="expiry"]:checked')?.value ?? 'custom';
+      if (custom) custom.hidden = pick !== 'custom';
+      if (!hint) return;
+      hint.classList.toggle('field-hint-warning', pick === 'none');
+      if (pick === 'none') hint.textContent = 'This token never expires. Prefer an expiry for tokens used by automation.';
+      else if (pick === 'custom') hint.textContent = date?.value ? 'Expires ' + fmt(new Date(date.value + 'T00:00:00Z')) + ' at 00:00 UTC.' : 'Expires at 00:00 UTC on the date you pick.';
+      else hint.textContent = 'Expires ' + fmt(new Date(Date.now() + Number(pick) * 86_400_000)) + ' at 00:00 UTC.';
+    };
+    group.addEventListener('change', sync);
+    date?.addEventListener('input', sync);
+    sync();
   }
 
-  // ——— Sidebar labels, remembered in a cookie so the next page renders the same ———
+  // ——— Audit: "Custom…" date range shows the two date inputs ———
+
+  for (const range of document.querySelectorAll('[data-range]')) {
+    const custom = document.querySelector('[data-range-custom]');
+    const sync = () => { if (custom) custom.hidden = range.value !== 'custom'; };
+    range.addEventListener('change', sync);
+    sync();
+  }
+
+  // ——— Audit: "Details" shows the raw JSON in the row below ———
+
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-toggle-row]');
+    if (!btn) return;
+    const row = document.getElementById(btn.dataset.toggleRow);
+    if (!row) return;
+    row.hidden = !row.hidden;
+    btn.setAttribute('aria-expanded', String(!row.hidden));
+    btn.textContent = row.hidden ? 'Details' : 'Hide';
+  });
+
+  // ——— Sidebar: labelled by default, collapses to icons; remembered in a cookie ———
 
   const shell = document.querySelector('.app-shell');
   document.querySelector('[data-sidebar-toggle]')?.addEventListener('click', (e) => {
     const btn = e.currentTarget;
-    const expanded = shell.classList.toggle('sidebar-expanded');
-    btn.setAttribute('aria-expanded', String(expanded));
-    btn.setAttribute('aria-label', expanded ? 'Hide labels' : 'Show labels');
-    const tip = btn.parentElement.querySelector('.tooltip');
-    if (tip) tip.textContent = expanded ? 'Hide labels' : 'Show labels';
-    document.cookie = 'vs_sidebar=' + (expanded ? 'expanded' : 'collapsed') + '; path=/; max-age=31536000; samesite=lax';
+    const collapsed = shell.classList.toggle('sidebar-collapsed');
+    btn.setAttribute('aria-expanded', String(!collapsed));
+    btn.setAttribute('aria-label', collapsed ? 'Show labels' : 'Hide labels');
+    document.cookie = 'vs_sidebar=' + (collapsed ? 'collapsed' : 'expanded') + '; path=/; max-age=31536000; samesite=lax';
   });
 
   // ——— User menu (details/summary): close on a click outside or Escape ———
@@ -521,7 +548,7 @@
       panel.classList.add('is-ready');
       const updated = panel.querySelector('[data-bind="updated"]');
       if (updated) {
-        updated.textContent = 'updated ' + fmtAbs(h.at).slice(11);
+        updated.textContent = 'Live · updated ' + fmtAbs(h.at).slice(11);
         updated.title = fmtAbs(h.at);
       }
       errorBox.hidden = !data.dockerError;
@@ -530,12 +557,14 @@
       const [memUsed, memUnit] = fmtBytes(h.memUsedBytes);
       tile('vm-cpu', num(h.cpuPercent), '%', h.cores + ' cores · load ' + h.load[0], h.cpuPercent);
       tile('vm-mem', memUsed, memUnit, 'of ' + bytes(h.memTotalBytes) + ' · ' + num(h.memPercent) + '% used', h.memPercent);
+      bind('vm-cpu-line', num(h.cpuPercent) + '% · load ' + h.load[0]);
+      bind('vm-mem-line', bytes(h.memUsedBytes) + ' / ' + bytes(h.memTotalBytes));
 
       if (kind === 'overview') {
         const a = data.apps;
         const [appsMem, appsUnit] = fmtBytes(a.memBytes);
         const n = data.projects.length;
-        tile('apps-cpu', num(a.cpuShare), '%', n === 0 ? 'nothing running' : n + ' running', a.cpuShare);
+        tile('apps-cpu', num(a.cpuShare), '%', n === 0 ? 'nothing running' : n + ' running project' + (n === 1 ? '' : 's'), a.cpuShare);
         tile('apps-mem', appsMem, appsUnit, num(a.memShare) + '% of the VM', a.memShare);
         const byName = new Map(data.projects.map((p) => [p.project, p]));
         for (const td of document.querySelectorAll('td[data-project][data-usage]')) {

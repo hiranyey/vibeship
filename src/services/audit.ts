@@ -17,6 +17,10 @@ export type AuditActor = { type: 'user'; id: number } | { type: 'token'; id: num
 
 export type AuditFilter = {
   action?: string;
+  /** Only actions starting with one of these, e.g. `["deploy."]` for a category. */
+  actionPrefixes?: string[];
+  /** Words to find in the action, the target or the details. */
+  search?: string;
   actor?: AuditActor;
   targetType?: string;
   since?: string;
@@ -70,40 +74,9 @@ export class AuditLog {
    */
   list(opts: AuditFilter & { limit?: number; beforeId?: number } = {}): AuditEntry[] {
     const limit = Math.min(Math.max(opts.limit ?? 50, 1), 500);
-    const where = ['id < ?'];
-    const args: Param[] = [opts.beforeId ?? Number.MAX_SAFE_INTEGER];
-    if (opts.action) {
-      where.push('action = ?');
-      args.push(opts.action);
-    }
-    if (opts.actor) {
-      where.push('actor_type = ?');
-      args.push(opts.actor.type);
-      if (opts.actor.type === 'user') {
-        where.push('user_id = ?');
-        args.push(opts.actor.id);
-      } else if (opts.actor.type === 'token') {
-        where.push('token_id = ?');
-        args.push(opts.actor.id);
-      }
-    }
-    if (opts.targetType) {
-      // `project:3` and the like; the prefix is matched literally.
-      where.push("substr(target, 1, length(?) + 1) = ? || ':'");
-      args.push(opts.targetType, opts.targetType);
-    }
-    if (opts.since) {
-      where.push('ts >= ?');
-      args.push(opts.since);
-    }
-    if (opts.until) {
-      where.push('ts < ?');
-      args.push(opts.until);
-    }
-    for (const prefix of opts.excludeActionPrefixes ?? []) {
-      where.push('substr(action, 1, length(?)) <> ?');
-      args.push(prefix, prefix);
-    }
+    const { where, args } = whereClause(opts);
+    where.unshift('id < ?');
+    args.unshift(opts.beforeId ?? Number.MAX_SAFE_INTEGER);
     const rows = this.#db.all<AuditRow>(
       `SELECT * FROM audit_log WHERE ${where.join(' AND ')} ORDER BY id DESC LIMIT ?`,
       ...args,
@@ -122,6 +95,13 @@ export class AuditLog {
     }));
   }
 
+  /** How many entries match the filter, for "Showing 50 of 312". */
+  count(opts: AuditFilter = {}): number {
+    const { where, args } = whereClause(opts);
+    const sql = `SELECT COUNT(*) AS n FROM audit_log${where.length ? ` WHERE ${where.join(' AND ')}` : ''}`;
+    return this.#db.get<{ n: number }>(sql, ...args)!.n;
+  }
+
   /** What there is to filter by: every action, actor and target type seen so far. */
   facets(): { actions: string[]; actors: AuditActor[]; targetTypes: string[] } {
     const actions = this.#db.all<{ action: string }>('SELECT DISTINCT action FROM audit_log ORDER BY action').map((r) => r.action);
@@ -137,4 +117,53 @@ export class AuditLog {
     ).map((r) => r.kind);
     return { actions, actors, targetTypes };
   }
+}
+
+/** The SQL conditions for a filter, with their arguments in order. */
+function whereClause(opts: AuditFilter): { where: string[]; args: Param[] } {
+  const where: string[] = [];
+  const args: Param[] = [];
+  if (opts.action) {
+    where.push('action = ?');
+    args.push(opts.action);
+  }
+  if (opts.actionPrefixes?.length) {
+    where.push(`(${opts.actionPrefixes.map(() => 'substr(action, 1, length(?)) = ?').join(' OR ')})`);
+    for (const prefix of opts.actionPrefixes) args.push(prefix, prefix);
+  }
+  if (opts.actor) {
+    where.push('actor_type = ?');
+    args.push(opts.actor.type);
+    if (opts.actor.type === 'user') {
+      where.push('user_id = ?');
+      args.push(opts.actor.id);
+    } else if (opts.actor.type === 'token') {
+      where.push('token_id = ?');
+      args.push(opts.actor.id);
+    }
+  }
+  if (opts.targetType) {
+    // `project:3` and the like; the prefix is matched literally.
+    where.push("substr(target, 1, length(?) + 1) = ? || ':'");
+    args.push(opts.targetType, opts.targetType);
+  }
+  if (opts.search?.trim()) {
+    // instr() is a plain substring match: no LIKE wildcards to escape.
+    const q = opts.search.trim().toLowerCase();
+    where.push("(instr(lower(action), ?) > 0 OR instr(lower(coalesce(target, '')), ?) > 0 OR instr(lower(details), ?) > 0)");
+    args.push(q, q, q);
+  }
+  if (opts.since) {
+    where.push('ts >= ?');
+    args.push(opts.since);
+  }
+  if (opts.until) {
+    where.push('ts < ?');
+    args.push(opts.until);
+  }
+  for (const prefix of opts.excludeActionPrefixes ?? []) {
+    where.push('substr(action, 1, length(?)) <> ?');
+    args.push(prefix, prefix);
+  }
+  return { where, args };
 }

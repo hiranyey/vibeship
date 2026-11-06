@@ -19,6 +19,9 @@ const PATHS = {
   'chevron-down': '<path d="M3.5 6L8 10.5 12.5 6"/>',
   close: '<path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/>',
   warning: '<path d="M8 2L14.5 13.5h-13z"/><path d="M8 6.5v3M8 11.6v.1"/>',
+  deploy: '<path d="M8 13V3M3.5 7.5L8 3l4.5 4.5"/>',
+  search: '<circle cx="7" cy="7" r="4.5"/><path d="M13.5 13.5l-3.2-3.2"/>',
+  more: '<circle cx="8" cy="3.5" r=".9" fill="currentColor"/><circle cx="8" cy="8" r=".9" fill="currentColor"/><circle cx="8" cy="12.5" r=".9" fill="currentColor"/>',
 } as const;
 
 export type IconName = keyof typeof PATHS;

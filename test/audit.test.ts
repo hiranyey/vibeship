@@ -66,3 +66,20 @@ test('filters by action, actor, target type, time and action prefix, and lists t
   assert.deepEqual(f.targetTypes, ['deploy', 'project', 'user']);
   assert.deepEqual(f.actors, [{ type: 'system' }, { type: 'token', id: tokenId }, { type: 'user', id: userId }]);
 });
+
+test('searches action, target and details, filters by action prefixes, and counts matches', () => {
+  const { audit, ctx } = setup();
+  audit.record(ctx, 'project.create', 'project:1', { name: 'deploy-or-die', hostname: 'deploy-or-die.example.com' });
+  audit.record(ctx, 'deploy.request', 'deploy:4', { project: 'deploy-or-die' });
+  audit.record(ctx, 'token.create', 'token:2', { name: 'ci-bot' });
+  audit.record(ctx, 'auth.login', 'user:1');
+
+  const actions = (f: Parameters<typeof audit.list>[0]) => audit.list(f).map((e) => e.action);
+  assert.deepEqual(actions({ search: 'DEPLOY-OR-DIE' }), ['deploy.request', 'project.create'], 'case-insensitive, in details');
+  assert.deepEqual(actions({ search: 'token:2' }), ['token.create'], 'in the target');
+  assert.deepEqual(actions({ search: '50%_' }), [], 'no wildcards');
+  assert.deepEqual(actions({ actionPrefixes: ['project.', 'token.'] }), ['token.create', 'project.create']);
+  assert.equal(audit.count(), 4);
+  assert.equal(audit.count({ actionPrefixes: ['deploy.'] }), 1);
+  assert.equal(audit.count({ excludeActionPrefixes: ['auth.'], search: 'deploy' }), 2);
+});
