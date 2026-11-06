@@ -10,14 +10,19 @@ import type { Services } from '../services/index.ts';
 import type { Project } from '../services/projects.ts';
 import { parseInput } from '../services/validate.ts';
 import {
-  ago, alert, copyable, copyButton, duration, emptyRow, field, type Html, pageHeader, pill, postButton, shortDigest, shownOnce, textarea, type View,
-} from './view.ts';
+  absoluteTime, ACTIONS, ago, alert, checkbox, confirmAttrs, copyable, copyButton, dataTable, drawer, duration, emptyRow, emptyState, externalLink, field,
+  type FieldErrors, fieldErrors, type Html, imageVersion, linkButton, pageHeader, postButton, selectField, shortDigest, shownOnce,
+  statusBadge, tag, textarea, type Tone,
+} from './components.ts';
 import { sideBySide } from './diff.ts';
 import { icon } from './icons.ts';
 import { hostPanel, projectPanel, usageCell } from './metrics.ts';
+import { type Names, names } from './names.ts';
+import type { View } from './view.ts';
 
 type Tab = 'overview' | 'deploys' | 'logs' | 'env' | 'compose' | 'settings';
 type Form = Record<string, string>;
+type Kind = 'image' | 'compose';
 
 const SAMPLE_COMPOSE = `services:
   app:
@@ -69,7 +74,13 @@ const message = (err: unknown): string => {
   return 'Something went wrong; see the Vibeship logs.';
 };
 
-/** Dashboard, new project wizard, project pages and the deploy view. */
+const TRIGGERS: Record<string, string> = { ui: 'Web UI', api: 'API', mcp: 'MCP', webhook: 'Webhook', recovery: 'Recovery' };
+const HEALTH_HELP = 'Polled until it answers 2xx. Empty: healthy while the container runs.';
+const NO_HEALTH = 'No health path, healthy while the container runs';
+const MEM_HELP = html`For example <code class="inline">512m</code> or <code class="inline">1g</code>. Leave empty for no limit.`;
+const OWNER_HELP = 'Set to 1000:1000 for images that run as the node user. Empty: owned by root.';
+
+/** Dashboard, the New project drawer, project pages and the deploy view. */
 export function projectPages(deps: { config: Config; services: Services; view: View }): Hono<AppEnv> {
   const { services: s, view } = deps;
   const app = new Hono<AppEnv>();
@@ -87,138 +98,129 @@ export function projectPages(deps: { config: Config; services: Services; view: V
     }
   }
 
-  // Dashboard
+  const registryOptions = () => [
+    { value: '', label: 'Matched by host, or anonymous' },
+    ...s.registries.list().map((r) => ({ value: String(r.id), label: `${r.name} (${r.host})` })),
+  ];
 
-  app.get('/', (c) => {
+  /** The hostname as an external link with a copy button: shown once, in the project header. */
+  const hostLink = (p: Project) => html`<span class="copyable">${externalLink(view.appUrl(p.hostname), p.hostname)}${copyButton(view.appUrl(p.hostname), 'Copy the app URL')}</span>`;
+
+  // Dashboard and the New project drawer
+
+  type NewProject = { kind: Kind; form: Form; error?: string; errors?: FieldErrors };
+
+  const dashboard = (c: Context<AppEnv>, creating?: NewProject) => {
     const projects = s.projects.list();
     const rows = projects.map((p) => ({ p, last: s.deploys.list(p.id, 1)[0] ?? null }));
     const count = (st: string) => projects.filter((p) => p.status === st).length;
     const lastDeploy = rows.map((r) => r.last?.createdAt).filter(Boolean).sort().at(-1);
+    const chips = [['all', 'All', projects.length], ...(['running', 'deploying', 'failed', 'stopped'] as const).map((st) => [st, st[0]!.toUpperCase() + st.slice(1), count(st)])] as Array<[string, string, number]>;
     return view.render(c, {
-      title: 'Projects',
+      title: creating ? 'New project' : 'Projects',
       nav: 'projects',
+      status: creating?.error ? 400 : 200,
       crumbs: [{ label: 'Projects' }],
       body: html`
-        ${pageHeader('Projects', 'Image and compose apps behind Caddy', html`<a class="btn btn-primary" href="/projects/new">${icon('plus', 14)}New project</a>`)}
-        <div class="stat-strip">
-          <div class="stat"><div class="stat-label">Projects</div><div class="stat-value">${projects.length}</div></div>
-          <div class="stat"><div class="stat-label">Running</div><div class="stat-value">${count('running')}</div></div>
-          <div class="stat${count('failed') > 0 ? ' stat-alert' : ''}"><div class="stat-label">Failed</div><div class="stat-value">${count('failed')}</div></div>
-          <div class="stat"><div class="stat-label">Last deploy</div><div class="stat-value t-lg">${ago(lastDeploy)}</div></div>
-        </div>
-        ${hostPanel()}
+        ${pageHeader('Projects', html`<span>Image and compose apps behind Caddy</span>${lastDeploy ? html`<span aria-hidden="true">·</span><span>Last deploy ${ago(lastDeploy)}</span>` : ''}`,
+          linkButton('/projects/new', 'New project', { variant: 'primary', icon: 'plus', drawer: 'new-project' }))}
         ${projects.length > 0
           ? html`<div class="filter-bar" data-filter-for="projects-table">
               <input class="input filter-search" type="search" placeholder="Filter by name or hostname" aria-label="Filter projects" data-filter-search />
               <div class="chip-group" role="group" aria-label="Filter by status">
-                ${(['all', 'running', 'deploying', 'failed', 'stopped'] as const).map((st) => html`<button class="chip${st === 'all' ? ' is-active' : ''}" type="button" data-filter-status="${st}" aria-pressed="${st === 'all' ? 'true' : 'false'}">${st === 'all' ? 'All' : st}<span class="chip-count">${st === 'all' ? projects.length : count(st)}</span></button>`)}
+                ${chips.map(([st, label, n]) => html`<button class="chip" type="button" data-filter-status="${st}" aria-pressed="${st === 'all' ? 'true' : 'false'}">${label}<span class="chip-count">${n}</span></button>`)}
               </div>
             </div>`
           : ''}
-        <div class="table-wrap">
-          <table class="table" id="projects-table">
-            <thead><tr><th>Name</th><th>Status</th><th>Hostname</th><th>Kind</th><th>Live version</th><th class="cell-usage">CPU</th><th class="cell-usage">Memory</th><th>Last deploy</th></tr></thead>
-            <tbody>
-              ${rows.length === 0
-                ? emptyRow(8, html`<div class="empty-state">
-                    <div class="empty-title">No projects yet</div>
-                    <p>Ship a container image or a compose file. Agents can create projects too, over MCP.</p>
-                    <a class="btn btn-primary btn-sm" href="/projects/new">${icon('plus', 14)}New project</a>
-                  </div>`)
-                : rows.map(({ p, last }) => html`<tr data-filter-row data-name="${p.name} ${p.hostname}" data-status="${p.status}"${p.status === 'deploying' ? html` data-watch="/api/projects/${p.id}" data-watch-status="deploying"` : ''}>
-                  <td class="cell-name"><a href="${base(p)}">${p.name}</a></td>
-                  <td>${pill(p.status)}</td>
-                  <td class="cell-mono"><a href="${view.appUrl(p.hostname)}" rel="noopener noreferrer" target="_blank">${p.hostname}</a></td>
-                  <td><span class="badge">${p.kind}</span></td>
-                  <td class="cell-mono">${liveVersion(p)}</td>
-                  ${usageCell('data-project', p.name, 'cpu')}
-                  ${usageCell('data-project', p.name, 'mem')}
-                  <td>${last ? deployRef(last) : html`<span class="text-subtle">never</span>`}</td>
-                </tr>`)}
-              <tr class="empty-row" data-filter-empty hidden><td colspan="8" class="text-muted">No projects match. <button class="link-btn" type="button" data-filter-reset>Clear the filter</button></td></tr>
-            </tbody>
-          </table>
-        </div>`,
-    });
-  });
-
-  // New project wizard
-
-  const wizard = (c: Context<AppEnv>, kind: string | undefined, f: Form = {}, error?: string) => {
-    if (kind !== 'image' && kind !== 'compose') {
-      return view.render(c, {
-        title: 'New project',
-        nav: 'projects',
-        crumbs: [{ label: 'Projects', href: '/' }, { label: 'New project' }],
-        body: html`${pageHeader('New project', 'What does the app ship as?')}
-          <div class="kind-choice">
-            <a href="/projects/new?kind=image"><div class="card card-pad">
-              <div class="card-title">Image</div>
-              <p class="text-muted t-sm">One container image from a registry, deployed by digest. CI pushes the image and posts the digest to the project's webhook.</p>
-            </div></a>
-            <a href="/projects/new?kind=compose"><div class="card card-pad">
-              <div class="card-title">Compose</div>
-              <p class="text-muted t-sm">A docker compose file with one routed service and any helpers (a database, a worker), checked against an allowlist.</p>
-            </div></a>
-          </div>`,
-      });
-    }
-    const registries = s.registries.list();
-    return view.render(c, {
-      title: `New ${kind} project`,
-      nav: 'projects',
-      status: error ? 400 : 200,
-      crumbs: [{ label: 'Projects', href: '/' }, { label: 'New project', href: '/projects/new' }, { label: kind }],
-      body: html`${pageHeader(`New ${kind} project`, kind === 'image' ? 'A container image from a registry' : 'A docker compose file')}
-        ${error ? alert('danger', error, 'The project was not created') : ''}
-        <form class="form-stack" method="post" action="/projects/new">
-          <input type="hidden" name="kind" value="${kind}" />
-          <div class="form-grid">
-            ${field({ label: 'Name', name: 'name', value: f.name, required: true, mono: true, help: 'Lowercase letters, digits and hyphens. Used for the folder, the container and the default hostname.' })}
-            ${field({ label: 'Hostname', name: 'hostname', value: f.hostname, mono: true, placeholder: `<name>.${deps.config.baseDomain}`, help: 'Leave empty for <name> on the base domain.' })}
-          </div>
-          ${kind === 'image'
-            ? html`<div class="form-grid">
-                ${field({ label: 'Image', name: 'imageRef', value: f.imageRef, required: true, mono: true, wide: true, placeholder: 'registry.example.com/library/app:latest', help: 'Without a digest; deploys pin the digest.' })}
-                ${field({ label: 'Container port', name: 'containerPort', value: f.containerPort, type: 'number', required: true, attrs: 'min="1" max="65535"' })}
-                <div class="field field-wide">
-                  <label class="field-label" for="f-registryId">Registry login</label>
-                  <select class="select" id="f-registryId" name="registryId">
-                    <option value="">Matched by host, or anonymous</option>
-                    ${registries.map((r) => html`<option value="${r.id}"${String(r.id) === f.registryId ? raw(' selected') : ''}>${r.name} (${r.host})</option>`)}
-                  </select>
-                </div>
-                ${field({ label: 'Health path', name: 'healthPath', value: f.healthPath, mono: true, placeholder: '/health', help: 'Answers 2xx when healthy. Empty: the container just has to stay up.' })}
-                ${field({ label: 'Memory limit', name: 'memLimit', value: f.memLimit, mono: true, placeholder: '512m' })}
-                ${field({ label: 'Data owner (uid:gid)', name: 'dataOwner', value: f.dataOwner, mono: true, placeholder: '1000:1000', help: 'Set to 1000:1000 for images that run as the node user. Empty: owned by root.' })}
-              </div>`
-            : html`${textarea({ label: 'compose.yaml', name: 'composeYaml', value: f.composeYaml ?? SAMPLE_COMPOSE, yaml: true, rows: 16, help: html`No privileged settings, ports only on <code class="inline">127.0.0.1</code>, bind mounts only of <code class="inline">./data</code>. Env vars below reach it as <code class="inline">\${NAME}</code> or with <code class="inline">env_file: .env</code>.` })}
-              <div class="form-grid">
-                ${field({ label: 'Routed service', name: 'routedService', value: f.routedService ?? 'app', required: true, mono: true, help: 'The service Caddy sends traffic to.' })}
-                ${field({ label: 'Port', name: 'port', value: f.port, type: 'number', required: true, attrs: 'min="1" max="65535"' })}
-                ${field({ label: 'Health path', name: 'healthPath', value: f.healthPath, mono: true, placeholder: '/health' })}
-              </div>`}
-          <div class="form-grid">
-            ${textarea({ label: 'Env vars', name: 'env', value: f.env, rows: 4, placeholder: 'KEY=value', help: 'One KEY=value per line.' })}
-            ${textarea({ label: 'Secret env vars', name: 'secretEnv', value: '', rows: 4, placeholder: 'API_KEY=…', help: 'Write-only: they can never be read back. Not kept if the form has an error.' })}
-          </div>
-          <label class="checkbox"><input type="checkbox" name="deploy"${f.deploy === undefined || checked(f.deploy) ? raw(' checked') : ''} /> Deploy right away</label>
-          <div class="form-actions">
-            <button class="btn btn-primary" type="submit">${icon('plus', 14)}Create project</button>
-            <a class="btn btn-ghost" href="/projects/new">Back</a>
-          </div>
-        </form>`,
+        ${dataTable({
+          id: 'projects-table',
+          caption: 'Projects',
+          head: ['Name', 'Status', 'Hostname', 'Kind', 'Live version', { label: 'CPU', cls: 'cell-usage' }, { label: 'Memory', cls: 'cell-usage' }, 'Last deploy'],
+          body: html`<tbody>
+            ${rows.length === 0
+              ? emptyRow(8, emptyState('No projects yet', 'Ship a container image or a compose file. Agents can create projects too, over MCP.',
+                  linkButton('/projects/new', 'New project', { variant: 'primary', size: 'sm', icon: 'plus', drawer: 'new-project' })))
+              : rows.map(({ p, last }) => html`<tr data-filter-row data-name="${p.name} ${p.hostname}" data-status="${p.status}"${p.status === 'deploying' ? html` data-watch="/api/projects/${p.id}" data-watch-status="deploying"` : ''}>
+                <td class="cell-name"><a href="${base(p)}">${p.name}</a></td>
+                <td>${statusBadge(p.status)}</td>
+                <td class="cell-nowrap">${externalLink(view.appUrl(p.hostname), p.hostname)}</td>
+                <td>${tag(p.kind)}</td>
+                <td>${liveVersion(p)}</td>
+                ${usageCell('data-project', p.name, 'cpu')}
+                ${usageCell('data-project', p.name, 'mem')}
+                <td>${last ? deployRef(last) : html`<span class="text-subtle">never</span>`}</td>
+              </tr>`)}
+            <tr class="empty-row" data-filter-empty hidden><td colspan="8" class="text-muted">No projects match. <button class="link-btn" type="button" data-filter-reset>Clear the filter</button></td></tr>
+          </tbody>`,
+        })}
+        ${hostPanel()}
+        ${newProjectDrawer(creating)}`,
     });
   };
 
-  app.get('/projects/new', (c) => wizard(c, c.req.query('kind')));
+  const newProjectDrawer = (creating?: NewProject) => {
+    const kind = creating?.kind ?? 'image';
+    const regs = registryOptions();
+    const panel = (k: Kind) => {
+      const f = creating?.kind === k ? creating.form : {};
+      const e = creating?.kind === k ? creating.errors ?? {} : {};
+      const id = (name: string) => `new-${k}-${name}`;
+      return html`<form class="form-stack" method="post" action="/projects/new" novalidate data-kind-panel="${k}"${k === kind ? '' : raw(' hidden')}>
+        <input type="hidden" name="kind" value="${k}" />
+        ${creating?.kind === k && creating.error ? alert('danger', creating.error, 'The project was not created') : ''}
+        <div class="form-grid">
+          ${field({ label: 'Name', name: 'name', id: id('name'), value: f.name, required: true, mono: true, span: 1, error: e.name, help: 'Lowercase letters, digits and hyphens.' })}
+          ${field({ label: 'Hostname', name: 'hostname', id: id('hostname'), value: f.hostname, mono: true, span: 1, error: e.hostname, placeholder: `<name>.${deps.config.baseDomain}`, help: 'Empty: the name on the base domain.' })}
+          ${k === 'image'
+            ? html`${field({ label: 'Image', name: 'imageRef', id: id('imageRef'), value: f.imageRef, required: true, mono: true, error: e.imageRef, placeholder: 'registry.example.com/library/app:latest', help: 'Without a digest; deploys pin the digest.' })}
+              ${field({ label: 'Container port', name: 'containerPort', id: id('containerPort'), value: f.containerPort, type: 'number', required: true, span: 1, error: e.containerPort, placeholder: '8080', attrs: 'min="1" max="65535"' })}
+              ${field({ label: 'Health path', name: 'healthPath', id: id('healthPath'), value: f.healthPath, mono: true, span: 1, error: e.healthPath, placeholder: '/health', help: HEALTH_HELP })}
+              ${selectField({ label: 'Registry login', name: 'registryId', id: id('registryId'), value: f.registryId, options: regs, error: e.registryId })}
+              ${field({ label: 'Memory limit', name: 'memLimit', id: id('memLimit'), value: f.memLimit, mono: true, span: 1, error: e.memLimit, placeholder: '512m', help: MEM_HELP })}
+              ${field({ label: 'Data owner (uid:gid)', name: 'dataOwner', id: id('dataOwner'), value: f.dataOwner, mono: true, span: 1, error: e.dataOwner, placeholder: '1000:1000', help: OWNER_HELP })}`
+            : html`${textarea({ label: 'compose.yaml', name: 'composeYaml', id: id('composeYaml'), value: f.composeYaml ?? SAMPLE_COMPOSE, code: true, rows: 14, required: true, error: e.composeYaml, help: html`No privileged settings, ports only on <code class="inline">127.0.0.1</code>, bind mounts only of <code class="inline">./data</code>. Env vars below reach it as <code class="inline">\${NAME}</code> or with <code class="inline">env_file: .env</code>.` })}
+              ${field({ label: 'Routed service', name: 'routedService', id: id('routedService'), value: f.routedService ?? 'app', required: true, mono: true, span: 1, error: e.routedService, help: 'The service Caddy sends traffic to.' })}
+              ${field({ label: 'Port', name: 'port', id: id('port'), value: f.port, type: 'number', required: true, span: 1, error: e.port, placeholder: '80', attrs: 'min="1" max="65535"' })}
+              ${field({ label: 'Health path', name: 'healthPath', id: id('healthPath'), value: f.healthPath, mono: true, span: 1, error: e.healthPath, placeholder: '/health', help: 'Empty: healthy while the container runs.' })}`}
+          ${textarea({ label: 'Env vars', name: 'env', id: id('env'), value: f.env, code: true, rows: 3, placeholder: 'KEY=value', help: 'One KEY=value per line.' })}
+          ${textarea({ label: 'Secret env vars', name: 'secretEnv', id: id('secretEnv'), value: '', code: true, rows: 3, placeholder: 'API_KEY=…', help: 'Write-only: they can never be read back. Not kept if the form has an error.' })}
+        </div>
+        ${checkbox('Deploy right away', 'deploy', f.deploy === undefined || checked(f.deploy))}
+        <div class="form-actions">
+          <button class="btn btn-primary" type="submit">${icon('plus', 14)}Create project</button>
+          <a class="btn btn-ghost" href="/" data-drawer-close>Cancel</a>
+        </div>
+      </form>`;
+    };
+    return drawer({
+      id: 'new-project',
+      title: 'New project',
+      wide: true,
+      open: Boolean(creating),
+      closeHref: '/',
+      body: html`
+        <div class="segmented" role="group" aria-label="What the app ships as">
+          <a href="/projects/new?kind=image" data-kind-switch="image" aria-current="${kind === 'image' ? 'true' : 'false'}">Image</a>
+          <a href="/projects/new?kind=compose" data-kind-switch="compose" aria-current="${kind === 'compose' ? 'true' : 'false'}">Compose</a>
+        </div>
+        <p class="form-note mt-0" data-kind-panel="image"${kind === 'image' ? '' : raw(' hidden')}>One container image from a registry, deployed by digest. CI pushes the image and posts the digest to the project's webhook.</p>
+        <p class="form-note mt-0" data-kind-panel="compose"${kind === 'compose' ? '' : raw(' hidden')}>A docker compose file with one routed service and any helpers (a database, a worker), checked against an allowlist.</p>
+        ${panel('image')}
+        ${panel('compose')}`,
+    });
+  };
+
+  app.get('/', (c) => dashboard(c));
+  // A direct link to the drawer, and where it goes without JS.
+  app.get('/projects/new', (c) => dashboard(c, { kind: c.req.query('kind') === 'compose' ? 'compose' : 'image', form: {} }));
 
   app.post('/projects/new', async (c) => {
     const f = await readForm(c);
+    const kind: Kind = f.kind === 'compose' ? 'compose' : 'image';
     try {
       const env = envInput(f);
       const common = { kind: f.kind, name: f.name?.trim(), hostname: opt(f.hostname) };
-      const input = f.kind === 'image'
+      const input = kind === 'image'
         ? { ...common, imageRef: f.imageRef?.trim(), containerPort: int(f.containerPort), registryId: int(f.registryId), healthPath: opt(f.healthPath), memLimit: opt(f.memLimit), dataOwner: opt(f.dataOwner) }
         : { ...common, composeYaml: f.composeYaml, routedService: f.routedService?.trim(), port: int(f.port), healthPath: opt(f.healthPath) };
       const project = s.projects.create(ctx(c), input);
@@ -229,34 +231,41 @@ export function projectPages(deps: { config: Config; services: Services; view: V
       }
       return view.redirect(c, base(project), 'success', `Created ${project.name}. Deploy it when you are ready.`);
     } catch (err) {
-      return wizard(c, f.kind, f, message(err));
+      return dashboard(c, { kind, form: f, error: message(err), errors: fieldErrors(err) });
     }
   });
 
   // Project pages
 
+  const TABS: Array<[Tab, string]> = [['overview', 'Overview'], ['deploys', 'Deploys'], ['logs', 'Logs'], ['env', 'Env'], ['compose', 'Compose'], ['settings', 'Settings']];
+
   const shell = (c: Context<AppEnv>, p: Project, tab: Tab, body: Html, status?: 400) => {
-    const tabs: Array<[Tab, string]> = [
-      ['overview', 'Overview'], ['deploys', 'Deploys'], ['logs', 'Logs'], ['env', 'Env'],
-      ...(p.kind === 'compose' ? [['compose', 'Compose'] as [Tab, string]] : []),
-      ['settings', 'Settings'],
-    ];
+    const tabs = TABS.filter(([t]) => t !== 'compose' || p.kind === 'compose');
+    const label = tabs.find(([t]) => t === tab)![1];
     const busy = p.status === 'deploying';
     const idle = hasLiveVersion(p) ? undefined : 'Nothing is running yet. Deploy first.';
     return view.render(c, {
-      title: p.name,
+      title: tab === 'overview' ? p.name : `${label} · ${p.name}`,
       nav: 'projects',
       status,
-      crumbs: [{ label: 'Projects', href: '/' }, { label: p.name, href: base(p) }, ...(tab === 'overview' ? [] : [{ label: tab }])],
+      crumbs: [{ label: 'Projects', href: '/' }, { label: p.name, href: base(p) }, ...(tab === 'overview' ? [] : [{ label }])],
       body: html`
-        ${pageHeader(html`${p.name} <span${busy ? html` data-watch="/api/projects/${p.id}" data-watch-status="deploying"` : ''}>${pill(p.status)}</span>`, html`<a class="mono" href="${view.appUrl(p.hostname)}" rel="noopener noreferrer" target="_blank">${p.hostname}</a>${copyButton(view.appUrl(p.hostname), 'Copy the app URL')}<span class="badge">${p.kind}</span>`, html`
-          ${postButton(`${base(p)}/deploy`, busy ? 'Deploying…' : 'Deploy', { cls: 'btn-primary', icon: 'rocket' })}
-          ${p.status === 'stopped'
-            ? postButton(`${base(p)}/start`, 'Start')
-            : html`${postButton(`${base(p)}/restart`, 'Restart', { disabledReason: idle })}${postButton(`${base(p)}/stop`, 'Stop', { disabledReason: idle, confirm: `Stop ${p.name}? Its hostname answers 404 until you start it.` })}`}
-        `)}
+        ${pageHeader(
+          html`${p.name}<span${busy ? html` data-watch="/api/projects/${p.id}" data-watch-status="deploying"` : ''}>${statusBadge(p.status)}</span>`,
+          html`${hostLink(p)}${tag(p.kind)}`,
+          html`
+            ${postButton(`${base(p)}/deploy`, busy ? 'Deploying…' : 'Deploy', { variant: 'primary', icon: 'rocket' })}
+            ${p.status === 'stopped'
+              ? postButton(`${base(p)}/start`, 'Start', { variant: 'secondary' })
+              : html`${postButton(`${base(p)}/restart`, 'Restart', { variant: 'secondary', disabledReason: idle })}
+                <span class="action-sep" aria-hidden="true"></span>
+                ${postButton(`${base(p)}/stop`, 'Stop', {
+                  disabledReason: idle,
+                  destructive: { title: `Stop ${p.name}?`, body: `${p.hostname} answers 404 until you start it again. Data is kept.`, action: 'Stop' },
+                })}`}`,
+        )}
         <nav class="tab-list" aria-label="Project sections">
-          ${tabs.map(([t, label]) => html`<a class="tab" href="${t === 'overview' ? base(p) : `${base(p)}/${t}`}" aria-selected="${t === tab ? 'true' : 'false'}"${t === tab ? raw(' aria-current="page"') : ''}>${label}</a>`)}
+          ${tabs.map(([t, l]) => html`<a class="tab" href="${t === 'overview' ? base(p) : `${base(p)}/${t}`}"${t === tab ? raw(' aria-current="page"') : ''}>${l}</a>`)}
         </nav>
         ${body}`,
     });
@@ -264,55 +273,69 @@ export function projectPages(deps: { config: Config; services: Services; view: V
 
   app.get('/projects/:name', async (c) => {
     const p = projectByName(c);
+    const n = names(s);
     const drift = s.deploys.drift(p.id);
     let containers: Html;
     try {
       const st = await s.deploys.status(p.id);
       containers = st.containers.length === 0
-        ? html`<div class="empty-state">
-            <div class="empty-title">${p.status === 'created' ? 'Not deployed yet' : p.status === 'stopped' ? 'Stopped' : 'No containers running'}</div>
-            <p>${p.status === 'created' ? 'Press Deploy above to start the first container.' : p.status === 'stopped' ? 'Press Start above to bring it back.' : 'Nothing is running for this project. The latest deploy log says why.'}</p>
-          </div>`
-        : html`<table class="table">
-        <thead><tr><th>Container</th><th>Service</th><th>State</th><th>Status</th><th class="cell-usage">CPU</th><th class="cell-usage">Memory</th><th class="cell-usage">Net in / out</th><th class="cell-usage">PIDs</th><th>Image</th></tr></thead>
-        <tbody>${st.containers.map((ct) => html`<tr><td class="cell-mono">${ct.name}</td><td class="cell-mono">${ct.service}</td><td>${ct.state}</td><td>${ct.status}</td>${
-            (['cpu', 'mem', 'net', 'pids'] as const).map((f) => usageCell('data-ct', ct.name, f))
-          }<td class="cell-mono cell-wrap">${ct.image}</td></tr>`)}</tbody>
-      </table>`;
+        ? html`<div class="table-wrap">${emptyState(
+            p.status === 'created' ? 'Not deployed yet' : p.status === 'stopped' ? 'Stopped' : 'No containers running',
+            p.status === 'created' ? 'Press Deploy above to start the first container.' : p.status === 'stopped' ? 'Press Start above to bring it back.' : 'Nothing is running for this project. The latest deploy log says why.',
+          )}</div>`
+        : dataTable({
+          caption: 'Containers',
+          head: ['Container', 'Service', 'State', 'Status', { label: 'CPU', cls: 'cell-usage' }, { label: 'Memory', cls: 'cell-usage' }, { label: 'Net in / out', cls: 'cell-usage' }, { label: 'PIDs', cls: 'cell-usage' }, 'Image'],
+          body: html`<tbody>${st.containers.map((ct) => html`<tr>
+            <td class="cell-mono">${ct.name}</td>
+            <td class="cell-mono">${ct.service}</td>
+            <td>${containerState(ct.state)}</td>
+            <td class="text-muted">${ct.status}</td>
+            ${(['cpu', 'mem', 'net', 'pids'] as const).map((f) => usageCell('data-ct', ct.name, f))}
+            <td class="cell-wrap">${copyable(ct.image)}</td>
+          </tr>`)}</tbody>`,
+        });
     } catch (err) {
       containers = alert('warning', `Could not read containers from Docker: ${(err as Error).message}`);
     }
     const [last] = s.deploys.list(p.id, 1);
+    const img = p.image;
+    const row = (key: string, value: Html | string) => html`<dt class="props-key">${key}</dt><dd class="props-val">${value}</dd>`;
     return shell(c, p, 'overview', html`
       ${driftAlert(p, drift)}
       ${last?.status === 'failed' ? alert('danger', html`${last.failureReason ?? 'unknown reason'} · <a href="/deploys/${last.id}">deploy #${last.id}</a>`, 'Last deploy failed') : ''}
       ${projectPanel(p.id)}
-      <div class="card card-pad">
-        <div class="props">
-          <div class="props-key">Hostname</div><div class="props-val">${copyable(p.hostname)}</div>
-          <div class="props-key">Upstream</div><div class="props-val">${copyable(p.upstream)}</div>
-          <div class="props-key">Live version</div><div class="props-val mono">${liveVersion(p, true)}</div>
-          ${p.image
-            ? html`<div class="props-key">Image</div><div class="props-val">${copyable(p.image.imageRef)}</div>
-              <div class="props-key">Port</div><div class="props-val mono">${p.image.containerPort}</div>
-              <div class="props-key">Health</div><div class="props-val mono">${p.image.healthPath ? `GET ${p.image.healthPath}` : 'container stays up'}</div>
-              <div class="props-key">Memory limit</div><div class="props-val mono">${p.image.memLimit ?? 'none'}</div>
-              <div class="props-key">Data owner</div><div class="props-val mono">${p.image.dataOwner ?? 'root'}</div>
-              <div class="props-key">Webhook</div><div class="props-val">${p.hasWebhook ? 'configured' : html`none · <a href="${base(p)}/settings">create one</a>`}</div>`
-            : html`<div class="props-key">Latest compose</div><div class="props-val">version ${p.compose?.version} · routes to <span class="mono">${p.compose?.routedService}:${p.compose?.port}</span></div>
-              <div class="props-key">Health</div><div class="props-val mono">${p.compose?.healthPath ? `GET ${p.compose.healthPath}` : 'container stays up'}</div>`}
-          <div class="props-key">Last deploy</div><div class="props-val">${last ? deployRef(last, last.actor) : 'never'}</div>
-          <div class="props-key">Created</div><div class="props-val">${ago(p.createdAt)} by ${p.createdBy}</div>
-        </div>
-      </div>
-      <h2 class="section-title">Containers</h2>
-      <div class="table-wrap">${containers}</div>`);
+      <section class="stack" aria-labelledby="containers-title">
+        <h2 class="section-title" id="containers-title">Containers</h2>
+        ${containers}
+      </section>
+      <section class="card card-pad" aria-labelledby="details-title">
+        <h2 class="card-title" id="details-title">Details</h2>
+        <dl class="props">
+          ${row('Upstream', copyable(p.upstream))}
+          ${row('Live version', p.kind === 'image'
+            ? imageVersion(img?.imageRef, img?.currentDigest)
+            : p.deployedComposeVersion === null ? html`<span class="text-subtle">none</span>` : html`<a href="${base(p)}/compose/${p.deployedComposeVersion}">Compose v${p.deployedComposeVersion}</a>`)}
+          ${img
+            ? html`${row('Image', copyable(img.imageRef))}
+              ${row('Port', html`<span class="mono">${img.containerPort}</span>`)}
+              ${row('Health', img.healthPath ? html`<span class="mono">GET ${img.healthPath}</span>` : NO_HEALTH)}
+              ${row('Memory limit', img.memLimit
+                ? html`<span class="mono">${img.memLimit}</span>`
+                : html`<span>None</span><span class="hint hint-warning">No limit: this app can use all of the VM's memory. <a href="${base(p)}/settings#f-memLimit">Set one</a></span>`)}
+              ${row('Data owner', img.dataOwner ? html`<span class="mono">${img.dataOwner}</span>` : html`<span class="mono">root</span><span class="text-muted t-sm">default</span>`)}
+              ${row('Webhook', p.hasWebhook ? html`<a href="${base(p)}/settings#webhook">Configured</a>` : html`<span>None</span><a href="${base(p)}/settings#webhook">Create one</a>`)}`
+            : html`${row('Latest compose', html`<a href="${base(p)}/compose/${p.compose?.version}">Version ${p.compose?.version}</a><span class="text-muted">routes to</span><span class="mono">${p.compose?.routedService}:${p.compose?.port}</span>`)}
+              ${row('Health', p.compose?.healthPath ? html`<span class="mono">GET ${p.compose.healthPath}</span>` : NO_HEALTH)}`}
+          ${row('Last deploy', last ? html`${deployRef(last)}<span class="by">by ${n.actor(last.actor, { trigger: last.trigger })}</span>` : html`<span class="text-subtle">never</span>`)}
+          ${row('Created', html`${ago(p.createdAt)}<span class="by">by ${n.actor(p.createdBy)}</span>`)}
+        </dl>
+      </section>`);
   });
 
   app.get('/projects/:name/deploys', (c) => {
     const p = projectByName(c);
-    const versions = composeVersionNumbers(p);
-    return shell(c, p, 'deploys', html`<div class="table-wrap">${deployTable(s.deploys.list(p.id, 100), versions)}</div>`);
+    return shell(c, p, 'deploys', deployTable(s.deploys.list(p.id, 100), composeVersionNumbers(p), names(s)));
   });
 
   app.get('/projects/:name/logs', async (c) => {
@@ -325,9 +348,9 @@ export function projectPages(deps: { config: Config; services: Services; view: V
             <strong>Container <span class="mono">${container}</span></strong>
             <span class="log-live" data-live hidden><span class="log-live-dot"></span> connecting</span>
           </div>
-          <pre class="log-body log-tall" aria-live="polite"></pre>
+          <pre class="log-body" aria-live="polite"></pre>
         </div>
-        <p class="text-muted t-sm">The last 300 lines, then new ones as they arrive.${p.kind === 'compose' ? ' Other services: docker compose logs on the server, or get_container_logs over MCP.' : ''}</p>`
+        <p class="text-muted t-sm mt-0">The last 300 lines, then new ones as they arrive.${p.kind === 'compose' ? html` Other services: <code class="inline">docker compose logs</code> on the server, or <code class="inline">get_container_logs</code> over MCP.` : ''}</p>`
       : alert('info', `${p.name} has no container yet; deploy it first.`));
   });
 
@@ -335,28 +358,28 @@ export function projectPages(deps: { config: Config; services: Services; view: V
 
   app.get('/projects/:name/env', (c) => {
     const p = projectByName(c);
+    const n = names(s);
     const env = s.env.list(p.id);
     return shell(c, p, 'env', html`
-      <div class="table-wrap">
-        <table class="table">
-          <thead><tr><th>Key</th><th>Value</th><th>Updated</th><th></th></tr></thead>
-          <tbody>${env.length === 0
-            ? emptyRow(4, html`<div class="empty-state">
-                <div class="empty-title">No env vars yet</div>
-                <p>Add <code class="inline">KEY=value</code> lines below, for example <code class="inline">DATABASE_URL=postgres://…</code>. Tick <em>Secret</em> for API keys and passwords.</p>
-              </div>`)
-            : env.map((e) => html`<tr>
-              <td class="cell-mono">${e.key}</td>
-              <td class="cell-mono cell-wrap">${e.isSecret ? html`<span class="env-secret" title="Secret: write-only">••••••••</span> <span class="badge">secret</span>` : e.value}</td>
-              <td>${ago(e.updatedAt)} by ${e.updatedBy}</td>
-              <td class="cell-actions">${postButton(`${base(p)}/env/unset`, 'Remove', { cls: 'btn-ghost-danger btn-sm', hidden: { key: e.key }, confirm: `Remove ${e.key}?` })}</td>
-            </tr>`)}</tbody>
-        </table>
-      </div>
-      <form class="card card-pad form-stack" method="post" action="${base(p)}/env">
-        <h2 class="section-title">Set env vars</h2>
-        ${textarea({ label: 'KEY=value lines', name: 'env', rows: 5, help: 'Adds or replaces these keys; others are left alone. Changes take effect on the next deploy.' })}
-        <label class="checkbox"><input type="checkbox" name="secret" /> Secret (write-only, never shown again)</label>
+      ${dataTable({
+        caption: 'Env vars',
+        head: ['Key', 'Value', 'Updated', ACTIONS],
+        body: html`<tbody>${env.length === 0
+          ? emptyRow(4, emptyState('No env vars yet', html`Add <code class="inline">KEY=value</code> lines below, for example <code class="inline">DATABASE_URL=postgres://…</code>. Tick <em>Secret</em> for API keys and passwords.`))
+          : env.map((e) => html`<tr>
+            <td class="cell-mono">${e.key}</td>
+            <td class="cell-mono cell-wrap">${e.isSecret ? html`<span class="text-muted" title="Secret: write-only">••••••••</span> ${tag('secret')}` : e.value}</td>
+            <td class="cell-nowrap">${ago(e.updatedAt)} <span class="by">by ${n.actor(e.updatedBy)}</span></td>
+            <td class="cell-actions">${postButton(`${base(p)}/env/unset`, 'Remove', {
+              size: 'sm', hidden: { key: e.key },
+              destructive: { title: `Remove ${e.key}?`, body: `${e.key} is removed from ${p.name}. Running containers keep it until the next deploy.`, action: 'Remove' },
+            })}</td>
+          </tr>`)}</tbody>`,
+      })}
+      <form class="card card-pad form-stack form-card" method="post" action="${base(p)}/env" novalidate>
+        <h2 class="card-title">Set env vars</h2>
+        ${textarea({ label: 'KEY=value lines', name: 'env', rows: 5, code: true, required: true, help: 'Adds or replaces these keys; others are left alone. Changes take effect on the next deploy.' })}
+        ${checkbox('Secret (write-only, never shown again)', 'secret')}
         <div class="form-actions"><button class="btn btn-primary" type="submit">Save</button></div>
       </form>`);
   });
@@ -379,62 +402,66 @@ export function projectPages(deps: { config: Config; services: Services; view: V
 
   // Compose
 
-  const composePage = (c: Context<AppEnv>, p: Project, f?: Form, error?: string) => {
+  const composePage = (c: Context<AppEnv>, p: Project, f?: Form, error?: string, errors: FieldErrors = {}) => {
     if (p.kind !== 'compose' || !p.compose) throw new AppError('not_found', `${p.name} is not a compose project`);
+    const n = names(s);
     const latest = s.projects.getComposeVersion(p.id, p.compose.version);
     const versions = s.projects.listComposeVersions(p.id).slice().reverse();
     const v = f ?? { composeYaml: latest.composeYaml, routedService: latest.routedService, port: String(latest.port), healthPath: latest.healthPath ?? '' };
     return shell(c, p, 'compose', html`
-      ${error ? alert('danger', error, 'The new version was not saved') : ''}
-      <form class="card card-pad form-stack" method="post" action="${base(p)}/compose">
-        <h2 class="section-title">Edit compose.yaml</h2>
-        ${textarea({ label: 'compose.yaml', name: 'composeYaml', value: v.composeYaml, yaml: true, rows: 18 })}
+      <form class="card card-pad form-stack" method="post" action="${base(p)}/compose" novalidate>
+        <h2 class="card-title">Edit compose.yaml</h2>
+        ${error ? alert('danger', error, 'The new version was not saved') : ''}
+        ${textarea({ label: 'compose.yaml', name: 'composeYaml', value: v.composeYaml, code: true, rows: 18, required: true, error: errors.composeYaml })}
         <div class="form-grid">
-          ${field({ label: 'Routed service', name: 'routedService', value: v.routedService, required: true, mono: true })}
-          ${field({ label: 'Port', name: 'port', value: v.port, type: 'number', required: true })}
-          ${field({ label: 'Health path', name: 'healthPath', value: v.healthPath, mono: true })}
-          ${field({ label: 'Note', name: 'note', value: v.note, placeholder: 'What changed' })}
+          ${field({ label: 'Routed service', name: 'routedService', value: v.routedService, required: true, mono: true, span: 1, error: errors.routedService })}
+          ${field({ label: 'Port', name: 'port', value: v.port, type: 'number', required: true, span: 1, error: errors.port, attrs: 'min="1" max="65535"' })}
+          ${field({ label: 'Health path', name: 'healthPath', value: v.healthPath, mono: true, span: 1, error: errors.healthPath, placeholder: '/health' })}
+          ${field({ label: 'Note', name: 'note', value: v.note, span: 1, placeholder: 'What changed' })}
         </div>
-        <label class="checkbox"><input type="checkbox" name="deploy" checked /> Deploy the new version</label>
+        ${checkbox('Deploy the new version', 'deploy', true)}
         <div class="form-actions"><button class="btn btn-primary" type="submit">Save version ${p.compose.version + 1}</button></div>
       </form>
       <h2 class="section-title">Versions</h2>
-      <div class="table-wrap">
-        <table class="table">
-          <thead><tr><th>Version</th><th>Routes to</th><th>Note</th><th>Saved</th><th>Changes</th><th></th></tr></thead>
-          <tbody>${versions.map((cv) => html`<tr>
-            <td><a href="${base(p)}/compose/${cv.version}">v${cv.version}</a>${cv.version === p.deployedComposeVersion ? html` <span class="badge">live</span>` : ''}</td>
-            <td class="cell-mono">${cv.routedService}:${cv.port}</td>
-            <td class="cell-wrap">${cv.note ?? ''}</td>
-            <td>${ago(cv.createdAt)} by ${cv.createdBy}</td>
-            <td>${cv.version > 1 ? html`<a href="${base(p)}/compose/${cv.version}#diff">diff v${cv.version - 1}</a>` : html`<span class="text-subtle">first</span>`}</td>
-            <td class="cell-actions">${postButton(`${base(p)}/deploy`, 'Deploy', { cls: 'btn-secondary btn-sm', hidden: { composeVersion: String(cv.version) }, confirm: `Deploy compose version ${cv.version} of ${p.name}?` })}</td>
-          </tr>`)}</tbody>
-        </table>
-      </div>`, error ? 400 : undefined);
+      ${dataTable({
+        caption: 'Compose versions',
+        head: ['Version', 'Routes to', 'Note', 'Saved', 'Changes', ACTIONS],
+        body: html`<tbody>${versions.map((cv) => html`<tr>
+          <td class="cell-nowrap"><a class="mono" href="${base(p)}/compose/${cv.version}">v${cv.version}</a>${cv.version === p.deployedComposeVersion ? html` ${tag('live')}` : ''}</td>
+          <td class="cell-mono">${cv.routedService}:${cv.port}</td>
+          <td class="cell-wrap">${cv.note ?? ''}</td>
+          <td class="cell-nowrap">${ago(cv.createdAt)} <span class="by">by ${n.actor(cv.createdBy)}</span></td>
+          <td>${cv.version > 1 ? html`<a href="${base(p)}/compose/${cv.version}#diff">diff v${cv.version - 1}</a>` : html`<span class="text-subtle">first</span>`}</td>
+          <td class="cell-actions">${postButton(`${base(p)}/deploy`, 'Deploy', {
+            variant: 'secondary', size: 'sm', hidden: { composeVersion: String(cv.version) },
+            confirm: { title: `Deploy version ${cv.version}?`, body: `${p.name} switches to compose version ${cv.version}.`, action: 'Deploy' },
+          })}</td>
+        </tr>`)}</tbody>`,
+      })}`, error ? 400 : undefined);
   };
 
   app.get('/projects/:name/compose', (c) => composePage(c, projectByName(c)));
 
   app.get('/projects/:name/compose/:version', (c) => {
     const p = projectByName(c);
-    const n = Number(c.req.param('version'));
-    if (!Number.isInteger(n) || n < 1) throw new AppError('not_found', 'Compose version not found');
-    const cv = s.projects.getComposeVersion(p.id, n);
-    const prev = n > 1 ? s.projects.getComposeVersion(p.id, n - 1) : null;
+    const num = Number(c.req.param('version'));
+    if (!Number.isInteger(num) || num < 1) throw new AppError('not_found', 'Compose version not found');
+    const cv = s.projects.getComposeVersion(p.id, num);
+    const prev = num > 1 ? s.projects.getComposeVersion(p.id, num - 1) : null;
+    const row = (key: string, value: Html | string) => html`<dt class="props-key">${key}</dt><dd class="props-val">${value}</dd>`;
     return shell(c, p, 'compose', html`
-      <div class="card card-pad">
-        <div class="props">
-          <div class="props-key">Version</div><div class="props-val">${cv.version}${cv.version === p.deployedComposeVersion ? ' (live)' : ''}</div>
-          <div class="props-key">Routes to</div><div class="props-val mono">${cv.routedService}:${cv.port}</div>
-          <div class="props-key">Health</div><div class="props-val mono">${cv.healthPath ?? 'container stays up'}</div>
-          <div class="props-key">Note</div><div class="props-val">${cv.note ?? ''}</div>
-          <div class="props-key">Saved</div><div class="props-val">${ago(cv.createdAt)} by ${cv.createdBy}</div>
-        </div>
-      </div>
-      ${prev ? composeDiff(prev.version, prev.composeYaml, cv.version, cv.composeYaml) : html`<pre class="pre-block pre-yaml">${cv.composeYaml}</pre>`}
-      <div class="row">
-        ${postButton(`${base(p)}/deploy`, `Deploy version ${cv.version}`, { cls: 'btn-primary', hidden: { composeVersion: String(cv.version) } })}
+      <section class="card card-pad">
+        <dl class="props">
+          ${row('Version', html`${cv.version}${cv.version === p.deployedComposeVersion ? html` ${tag('live')}` : ''}`)}
+          ${row('Routes to', html`<span class="mono">${cv.routedService}:${cv.port}</span>`)}
+          ${row('Health', cv.healthPath ? html`<span class="mono">GET ${cv.healthPath}</span>` : NO_HEALTH)}
+          ${row('Note', cv.note ?? html`<span class="text-subtle">none</span>`)}
+          ${row('Saved', html`${ago(cv.createdAt)}<span class="by">by ${names(s).actor(cv.createdBy)}</span>`)}
+        </dl>
+      </section>
+      ${prev ? composeDiff(prev.version, prev.composeYaml, cv.version, cv.composeYaml) : html`<pre class="pre-block">${cv.composeYaml}</pre>`}
+      <div class="form-actions">
+        ${postButton(`${base(p)}/deploy`, `Deploy version ${cv.version}`, { variant: 'primary', hidden: { composeVersion: String(cv.version) } })}
         <a class="btn btn-ghost" href="${base(p)}/compose">All versions</a>
       </div>`);
   });
@@ -452,13 +479,13 @@ export function projectPages(deps: { config: Config; services: Services; view: V
       }
       return view.redirect(c, `${base(p)}/compose`, 'success', `Saved compose version ${cv.version}.`);
     } catch (err) {
-      return composePage(c, p, f, message(err));
+      return composePage(c, p, f, message(err), fieldErrors(err));
     }
   });
 
   // Settings
 
-  const settingsPage = (c: Context<AppEnv>, p: Project, opts: { form?: Form; error?: string; webhookUrl?: string } = {}) => {
+  const settingsPage = (c: Context<AppEnv>, p: Project, opts: { form?: Form; error?: string; errors?: FieldErrors; webhookUrl?: string } = {}) => {
     const f = opts.form ?? {
       hostname: p.hostname,
       imageRef: p.image?.imageRef ?? '',
@@ -468,50 +495,60 @@ export function projectPages(deps: { config: Config; services: Services; view: V
       memLimit: p.image?.memLimit ?? '',
       dataOwner: p.image?.dataOwner ?? '',
     };
-    const registries = s.registries.list();
+    const e = opts.errors ?? {};
     const drift = s.deploys.drift(p.id);
+    const payload = '{"digest": "sha256:…"}';
     return shell(c, p, 'settings', html`
-      ${opts.error ? alert('danger', opts.error, 'Not saved') : ''}
       ${driftAlert(p, drift)}
-      <form class="card card-pad form-stack" method="post" action="${base(p)}/settings">
-        <h2 class="section-title">Project</h2>
+      <form class="card card-pad form-stack form-card" method="post" action="${base(p)}/settings" novalidate>
+        <h2 class="card-title">Project</h2>
+        ${opts.error ? alert('danger', opts.error, 'Not saved') : ''}
         <div class="form-grid">
-          ${field({ label: 'Hostname', name: 'hostname', value: f.hostname, required: true, mono: true, help: 'Changes the route once deployed.' })}
+          ${field({ label: 'Hostname', name: 'hostname', value: f.hostname, required: true, mono: true, error: e.hostname, help: 'Changes the route once deployed.' })}
           ${p.kind === 'image'
-            ? html`${field({ label: 'Image', name: 'imageRef', value: f.imageRef, required: true, mono: true, wide: true })}
-              ${field({ label: 'Container port', name: 'containerPort', value: f.containerPort, type: 'number', required: true })}
-              ${field({ label: 'Health path', name: 'healthPath', value: f.healthPath, mono: true, placeholder: '/health' })}
-              <div class="field field-wide">
-                <label class="field-label" for="f-registryId">Registry login</label>
-                <select class="select" id="f-registryId" name="registryId">
-                  <option value="">Matched by host, or anonymous</option>
-                  ${registries.map((r) => html`<option value="${r.id}"${String(r.id) === f.registryId ? raw(' selected') : ''}>${r.name} (${r.host})</option>`)}
-                </select>
-              </div>
-              ${field({ label: 'Memory limit', name: 'memLimit', value: f.memLimit, mono: true, placeholder: '512m' })}
-              ${field({ label: 'Data owner (uid:gid)', name: 'dataOwner', value: f.dataOwner, mono: true, placeholder: '1000:1000', help: 'Set to 1000:1000 for images that run as the node user. Empty: owned by root.' })}`
+            ? html`${field({ label: 'Image', name: 'imageRef', value: f.imageRef, required: true, mono: true, error: e.imageRef, help: 'Without a digest; deploys pin the digest.' })}
+              ${selectField({ label: 'Registry login', name: 'registryId', value: f.registryId, options: registryOptions(), error: e.registryId })}
+              ${field({ label: 'Container port', name: 'containerPort', value: f.containerPort, type: 'number', required: true, span: 1, error: e.containerPort, attrs: 'min="1" max="65535"' })}
+              ${field({ label: 'Health path', name: 'healthPath', value: f.healthPath, mono: true, span: 1, error: e.healthPath, placeholder: '/health', help: HEALTH_HELP })}
+              ${field({ label: 'Memory limit', name: 'memLimit', value: f.memLimit, mono: true, span: 1, error: e.memLimit, placeholder: '512m', help: MEM_HELP })}
+              ${field({ label: 'Data owner (uid:gid)', name: 'dataOwner', value: f.dataOwner, mono: true, span: 1, error: e.dataOwner, placeholder: '1000:1000', help: OWNER_HELP })}`
             : ''}
         </div>
-        ${p.kind === 'compose' ? html`<p class="text-muted t-sm mt-0">The compose file, routed service and port change on the <a href="${base(p)}/compose">Compose</a> tab.</p>` : ''}
-        <div class="form-actions"><button class="btn btn-primary" type="submit">Save</button><span class="text-muted t-sm">Takes effect on the next deploy.</span></div>
+        ${p.kind === 'compose' ? html`<p class="form-note mt-0">The compose file, routed service and port change on the <a href="${base(p)}/compose">Compose</a> tab.</p>` : ''}
+        <div class="form-actions">
+          <button class="btn btn-primary" type="submit">Save</button>
+          <button class="btn btn-secondary" type="submit" name="deploy" value="1">${icon('rocket', 14)}Save &amp; deploy</button>
+          <span class="form-note">Save takes effect on the next deploy.</span>
+        </div>
       </form>
       ${p.kind === 'image'
-        ? html`<div class="card card-pad form-stack">
-            <h2 class="section-title">Deploy webhook</h2>
-            <p class="text-muted t-sm mt-0">CI posts <code class="inline">{"digest": "sha256:…"}</code> here after pushing the image; see <code class="inline">examples/github-actions/deploy.yml</code>. The URL is its own secret: anyone holding it can deploy, but only digests of <span class="mono">${p.image?.imageRef}</span>.</p>
-            ${opts.webhookUrl ? shownOnce('Webhook URL', opts.webhookUrl, 'Shown once. Store it as a CI secret now; rotating makes a new one and the old one stops working.') : ''}
-            <div class="row">${postButton(`${base(p)}/webhook`, p.hasWebhook ? 'Rotate webhook URL' : 'Create webhook URL', {
-              cls: 'btn-secondary',
-              confirm: p.hasWebhook ? 'Rotate the webhook URL? The old one stops working at once.' : undefined,
-            })}<span class="text-muted t-sm">${p.hasWebhook ? 'A webhook URL is set.' : 'No webhook yet.'}</span></div>
-          </div>`
+        ? html`<section class="card card-pad form-stack form-card" id="webhook" aria-labelledby="webhook-title">
+            <h2 class="card-title" id="webhook-title">Deploy webhook</h2>
+            <p class="form-note mt-0">After pushing the image, CI posts the new digest to this URL (see <code class="inline">examples/github-actions/deploy.yml</code>). Anyone with the URL can deploy, but only digests of <span class="mono">${p.image?.imageRef}</span>.</p>
+            <div>
+              <div class="label">Example body</div>
+              <div class="code-block"><pre>${payload}</pre>${copyButton(payload, 'Copy the example body')}</div>
+            </div>
+            ${opts.webhookUrl ? shownOnce('Webhook URL', opts.webhookUrl, 'Store it as a CI secret now; it cannot be shown again.') : ''}
+            <div class="form-actions">
+              ${postButton(`${base(p)}/webhook`, p.hasWebhook ? 'Rotate webhook URL' : 'Create webhook URL', {
+                variant: 'secondary',
+                confirm: p.hasWebhook ? { title: 'Rotate the webhook URL?', body: 'A new URL is created and the old one stops working at once. Update the CI secret afterwards.', action: 'Rotate' } : undefined,
+              })}
+              <span class="form-note">${p.hasWebhook ? 'A webhook URL is set. Rotating makes a new one and the old URL stops working at once.' : 'No webhook yet.'}</span>
+            </div>
+          </section>`
         : ''}
-      <form class="card card-pad danger-zone form-stack" method="post" action="${base(p)}/delete">
-        <h2 class="section-title">Delete project</h2>
-        <p class="text-muted t-sm mt-0">Stops the containers and removes the route, files and history. <span class="mono">data/</span> and named volumes are kept unless you tick the box.</p>
-        <label class="checkbox"><input type="checkbox" name="deleteData" /> Also delete data/ and named volumes</label>
-        ${field({ label: `Type ${p.name} to confirm`, labelHtml: html`Type <code class="inline">${p.name}</code> to confirm`, name: 'confirmName', mono: true, narrow: true, required: true, attrs: `autocomplete="off" spellcheck="false" data-confirm-name="${p.name}"` })}
-        <div class="form-actions"><button class="btn btn-danger" type="submit" data-confirm-target>${icon('trash', 14)}Delete ${p.name}</button><span class="text-muted t-sm">This cannot be undone.</span></div>
+      <form class="card card-pad is-danger form-stack form-card" method="post" action="${base(p)}/delete" novalidate${confirmAttrs({
+        title: `Delete ${p.name}?`, body: 'Stops the containers and removes the route, files and history. This cannot be undone.', action: `Delete ${p.name}`, tone: 'danger',
+      })}>
+        <h2 class="card-title">Delete project</h2>
+        <p class="form-note mt-0">Stops the containers and removes the route, files and history. <span class="mono">data/</span> and named volumes are kept unless you tick the box.</p>
+        ${checkbox('Also delete data/ and named volumes', 'deleteData')}
+        <div class="form-grid">
+          ${field({ label: `Type ${p.name} to confirm`, labelHtml: html`Type <code class="inline">${p.name}</code> to confirm`, name: 'confirmName', mono: true, required: true, attrs: `autocomplete="off" spellcheck="false" data-confirm-name="${p.name}"` })}
+        </div>
+        <div class="form-actions"><button class="btn btn-danger" type="submit" data-confirm-target>${icon('trash', 14)}Delete ${p.name}</button><span class="form-note">This cannot be undone.</span></div>
       </form>`, opts.error ? 400 : undefined);
   };
 
@@ -520,6 +557,7 @@ export function projectPages(deps: { config: Config; services: Services; view: V
   app.post('/projects/:name/settings', async (c) => {
     const p = projectByName(c);
     const f = await readForm(c);
+    let updated: Project;
     try {
       const changes = p.kind === 'image'
         ? {
@@ -528,11 +566,13 @@ export function projectPages(deps: { config: Config; services: Services; view: V
             dataOwner: optNull(f.dataOwner),
           }
         : { hostname: f.hostname?.trim() };
-      const updated = s.projects.update(ctx(c), p.id, changes);
-      return view.redirect(c, `${base(updated)}/settings`, 'success', 'Saved. Deploy to apply it.');
+      updated = s.projects.update(ctx(c), p.id, changes);
     } catch (err) {
-      return settingsPage(c, p, { form: f, error: message(err) });
+      return settingsPage(c, p, { form: f, error: message(err), errors: fieldErrors(err) });
     }
+    if (f.deploy !== '1') return view.redirect(c, `${base(updated)}/settings`, 'success', 'Saved. Deploy to apply it.');
+    return act(c, `${base(updated)}/settings`, () => s.deploys.request(ctx(c), updated.id, {}, 'ui'),
+      (d) => `/deploys/${(d as Deploy).id}`, 'Saved; the deploy is under way.');
   });
 
   app.post('/projects/:name/webhook', (c) => {
@@ -582,29 +622,33 @@ export function projectPages(deps: { config: Config; services: Services; view: V
     const finished = d.status === 'healthy' || d.status === 'failed';
     const lastSeq = lines.at(-1)?.seq ?? 0;
     const version = p.kind === 'compose' ? composeVersionNumbers(p).get(d.composeVersionId ?? -1) : null;
+    const row = (key: string, value: Html | string) => html`<dt class="props-key">${key}</dt><dd class="props-val">${value}</dd>`;
     return view.render(c, {
       title: `Deploy #${d.id}`,
       nav: 'projects',
-      crumbs: [{ label: 'Projects', href: '/' }, { label: p.name, href: base(p) }, { label: `deploy #${d.id}` }],
+      crumbs: [{ label: 'Projects', href: '/' }, { label: p.name, href: base(p) }, { label: 'Deploys', href: `${base(p)}/deploys` }, { label: `Deploy #${d.id}` }],
       body: html`
-        ${pageHeader(html`Deploy #${d.id} ${pill(d.status, 'deploy')}`, html`<a href="${base(p)}">${p.name}</a> · ${d.trigger} by ${d.actor} · ${ago(d.createdAt)}`, html`
-          ${finished ? postButton(`${base(p)}/deploy`, 'Deploy again', { cls: 'btn-primary' }) : ''}
-          <a class="btn btn-secondary" href="${base(p)}/deploys">All deploys</a>`)}
+        ${pageHeader(html`Deploy #${d.id} ${statusBadge(d.status, { kind: 'deploy' })}`,
+          html`<a href="${base(p)}">${p.name}</a><span aria-hidden="true">·</span><span>${TRIGGERS[d.trigger] ?? d.trigger} by ${names(s).actor(d.actor, { trigger: d.trigger })}</span><span aria-hidden="true">·</span>${ago(d.createdAt)}`,
+          html`${finished ? postButton(`${base(p)}/deploy`, 'Deploy again', { variant: 'primary', icon: 'rocket' }) : ''}
+            ${linkButton(`${base(p)}/deploys`, 'All deploys', { variant: 'secondary' })}`)}
         ${d.status === 'failed' ? alert('danger', d.failureReason ?? 'unknown reason', 'Deploy failed') : ''}
-        ${d.status === 'healthy' ? alert('success', html`<a href="${view.appUrl(p.hostname)}" rel="noopener noreferrer" target="_blank">${p.hostname}</a> is serving this version.`, 'Live') : ''}
-        <div class="card card-pad">
-          <div class="props">
-            <div class="props-key">Version</div><div class="props-val mono">${p.kind === 'image' ? d.digest ? copyable(d.digest) : 'latest for the tag' : version ? `compose version ${version}` : 'unknown'}</div>
-            <div class="props-key">Queued</div><div class="props-val">${ago(d.createdAt)}</div>
-            <div class="props-key">Took</div><div class="props-val">${duration(d.startedAt, d.finishedAt) || (finished ? '' : 'still going')}</div>
-          </div>
-        </div>
+        ${d.status === 'healthy' ? alert('success', html`${externalLink(view.appUrl(p.hostname), p.hostname)} is serving this version.`, 'Live') : ''}
+        <section class="card card-pad">
+          <dl class="props">
+            ${row('Version', p.kind === 'image'
+              ? d.digest ? copyable(d.digest) : 'latest for the tag'
+              : version ? html`<a href="${base(p)}/compose/${version}">Compose version ${version}</a>` : 'unknown')}
+            ${row('Queued', ago(d.createdAt))}
+            ${row('Took', duration(d.startedAt, d.finishedAt) || (finished ? html`<span class="text-subtle">—</span>` : 'still going'))}
+          </dl>
+        </section>
         <div class="log-viewer"${finished ? '' : raw(` data-stream="/api/deploys/${d.id}/logs?after=${lastSeq}"`)}>
           <div class="log-viewer-header">
             <strong>Deploy log</strong>
             <span class="log-live" data-live hidden><span class="log-live-dot"></span> connecting</span>
           </div>
-          <pre class="log-body log-tall" aria-live="polite">${lines.map((l) => html`<div class="log-line"><span class="log-num">${l.seq}</span><span class="log-ts">${l.ts.slice(11, 19)}</span><span class="${lineClass(l.stream, l.line)}">${l.line}</span></div>`)}</pre>
+          <pre class="log-body" aria-live="polite">${lines.map((l) => html`<div class="log-line"><span class="log-num">${l.seq}</span><span class="log-ts" title="${absoluteTime(l.ts)}">${l.ts.slice(11, 19)}</span><span class="${lineClass(l.stream, l.line)}">${l.line}</span></div>`)}</pre>
         </div>`,
     });
   });
@@ -633,14 +677,21 @@ function hasLiveVersion(p: Project): boolean {
   return p.kind === 'image' ? Boolean(p.image?.currentDigest) : p.deployedComposeVersion !== null;
 }
 
-/** "#12 (healthy) 5m ago", kept on one aligned line. */
-function deployRef(d: Deploy, by?: string): Html {
-  return html`<span class="deploy-ref"><a href="/deploys/${d.id}">#${d.id}</a>${pill(d.status, 'deploy')}${ago(d.createdAt)}${by ? html`<span class="text-muted">by ${by}</span>` : ''}</span>`;
+/** A Docker container state as a status: running is success, restarting warning, dead danger, the rest neutral. */
+function containerState(state: string): Html {
+  const tones: Record<string, Tone> = { running: 'success', restarting: 'warning', dead: 'danger' };
+  return statusBadge(state, { tone: tones[state] ?? 'neutral', label: state[0]!.toUpperCase() + state.slice(1) });
 }
 
-function liveVersion(p: Project, long = false): Html {
-  if (p.kind === 'image') return long && p.image?.currentDigest ? copyable(p.image.currentDigest) : shortDigest(p.image?.currentDigest);
-  return p.deployedComposeVersion === null ? html`<span class="text-subtle">none</span>` : html`compose v${p.deployedComposeVersion}`;
+/** "#12 · Healthy · 5m ago", in a fixed layout so rows line up. */
+function deployRef(d: Deploy): Html {
+  return html`<span class="deploy-ref"><a href="/deploys/${d.id}" title="deploy:${d.id}">#${d.id}</a>${statusBadge(d.status, { kind: 'deploy' })}${ago(d.createdAt)}</span>`;
+}
+
+/** The tag and a 7-character digest for an image; the compose version for compose. */
+function liveVersion(p: Project): Html {
+  if (p.kind === 'image') return imageVersion(p.image?.imageRef, p.image?.currentDigest);
+  return p.deployedComposeVersion === null ? html`<span class="text-subtle">none</span>` : html`Compose v${p.deployedComposeVersion}`;
 }
 
 /** Two-column diff of a compose version against the one before it. */
@@ -676,23 +727,21 @@ function driftAlert(p: Project, drift: { files: Array<{ path: string; state: str
       : ''}`;
 }
 
-function deployTable(deploys: Deploy[], versions: Map<number, number>): Html {
-  return html`<table class="table">
-    <thead><tr><th>Deploy</th><th>Status</th><th>Trigger</th><th>Version</th><th>By</th><th>Queued</th><th>Took</th><th>Reason</th></tr></thead>
-    <tbody>${deploys.length === 0
-      ? emptyRow(8, html`<div class="empty-state">
-          <div class="empty-title">No deploys yet</div>
-          <p>Press <strong>Deploy</strong> above, or let CI post to the project's webhook.</p>
-        </div>`)
+function deployTable(deploys: Deploy[], versions: Map<number, number>, n: Names): Html {
+  return dataTable({
+    caption: 'Deploys',
+    head: ['Deploy', 'Status', 'Trigger', 'Version', 'By', 'Queued', 'Took', 'Reason'],
+    body: html`<tbody>${deploys.length === 0
+      ? emptyRow(8, emptyState('No deploys yet', html`Press <strong>Deploy</strong> above, or let CI post to the project's webhook.`))
       : deploys.map((d) => html`<tr>
-        <td><a href="/deploys/${d.id}">#${d.id}</a></td>
-        <td>${pill(d.status, 'deploy')}</td>
-        <td>${d.trigger}</td>
-        <td class="cell-mono">${d.composeVersionId !== null ? `v${versions.get(d.composeVersionId) ?? '?'}` : shortDigest(d.digest)}</td>
-        <td>${d.actor}</td>
-        <td>${ago(d.createdAt)}</td>
-        <td>${duration(d.startedAt, d.finishedAt)}</td>
+        <td><a class="mono" href="/deploys/${d.id}">#${d.id}</a></td>
+        <td>${statusBadge(d.status, { kind: 'deploy' })}</td>
+        <td>${TRIGGERS[d.trigger] ?? d.trigger}</td>
+        <td class="cell-nowrap">${d.composeVersionId !== null ? html`<span class="mono">v${versions.get(d.composeVersionId) ?? '?'}</span>` : shortDigest(d.digest)}</td>
+        <td>${n.actor(d.actor, { trigger: d.trigger })}</td>
+        <td class="cell-nowrap">${ago(d.createdAt)}</td>
+        <td class="cell-num">${duration(d.startedAt, d.finishedAt)}</td>
         <td class="cell-wrap">${d.failureReason ?? ''}</td>
-      </tr>`)}</tbody>
-  </table>`;
+      </tr>`)}</tbody>`,
+  });
 }

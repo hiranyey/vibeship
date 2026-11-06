@@ -1,18 +1,33 @@
-// Vibeship's only client script: live logs over server-sent events,
-// confirm prompts, copy buttons, busy buttons, status polling and the
-// dashboard filter and the CPU and memory cards. No build step.
+// Vibeship's only client script: live logs over server-sent events, the
+// confirm dialog, drawers, inline form validation, copy buttons, busy
+// buttons, status polling, the dashboard filter and the CPU and memory
+// numbers. No build step. Everything works without it except live updates;
+// forms then fall back to the server's own validation.
 (() => {
   'use strict';
+
+  /** "2026-11-06 14:03:22 UTC": the same format as absoluteTime() in src/ui/components.ts. */
+  const fmtAbs = (t) => new Date(t).toISOString().replace('T', ' ').replace(/\.\d+Z$/, ' UTC');
+
+  const live = document.getElementById('live-region');
+  /** Tells screen readers about something that happened without a page load. */
+  const announce = (text) => {
+    if (!live) return;
+    live.textContent = '';
+    setTimeout(() => { live.textContent = text; }, 30);
+  };
 
   // On phones, tables turn into stacked cards (see `.table.is-stackable` in
   // vibeship.css). Each cell is labelled with its column heading here; cells
   // only ever get new contents later, so the labels stay put.
   for (const table of document.querySelectorAll('table.table')) {
     const heads = [...table.querySelectorAll('thead th')].map((th) => th.textContent.trim());
-    for (const row of table.tBodies[0]?.rows ?? []) {
-      [...row.cells].forEach((td, i) => {
-        if (heads[i] && td.colSpan === 1) td.dataset.label = heads[i];
-      });
+    for (const body of table.tBodies) {
+      for (const row of body.rows) {
+        [...row.cells].forEach((td, i) => {
+          if (heads[i] && td.colSpan === 1) td.dataset.label = heads[i];
+        });
+      }
     }
     table.classList.add('is-stackable');
   }
@@ -23,6 +38,8 @@
   if (tabList && currentTab && tabList.scrollWidth > tabList.clientWidth) {
     tabList.scrollLeft = currentTab.offsetLeft - tabList.offsetLeft - (tabList.clientWidth - currentTab.offsetWidth) / 2;
   }
+
+  // ——— Live logs ———
 
   /** Appends one log line to a `.log-body`, keeping it scrolled to the end if it was. */
   function appendLine(body, { seq, stream, line, ts }) {
@@ -40,6 +57,7 @@
       const t = document.createElement('span');
       t.className = 'log-ts';
       t.textContent = ts.slice(11, 19);
+      t.title = fmtAbs(ts);
       row.append(t);
     }
     const text = document.createElement('span');
@@ -52,15 +70,15 @@
     if (atEnd) body.scrollTop = body.scrollHeight;
   }
 
-  function setLive(viewer, text, live) {
+  function setLive(viewer, text, on) {
     const badge = viewer.querySelector('[data-live]');
     if (!badge) return;
     badge.hidden = false;
     badge.lastChild.textContent = ' ' + text;
-    badge.querySelector('.log-live-dot').hidden = !live;
+    badge.querySelector('.log-live-dot').hidden = !on;
   }
 
-  // <div class="log-viewer" data-stream="/api/..." data-kind="deploy|container">
+  // <div class="log-viewer" data-stream="/api/...">
   for (const viewer of document.querySelectorAll('[data-stream]')) {
     const body = viewer.querySelector('.log-body');
     body.scrollTop = body.scrollHeight;
@@ -91,19 +109,102 @@
     });
   }
 
-  // <form data-confirm="Really?">, then a busy state on the button that sent it,
-  // so a slow deploy can't be posted twice.
+  // ——— Inline validation for <form novalidate> ———
+
+  const labelOf = (el) => {
+    const label = el.id && document.querySelector('label[for="' + el.id + '"]');
+    return (label?.textContent || el.name || 'This field').trim();
+  };
+  function messageFor(el) {
+    const v = el.validity;
+    const label = labelOf(el);
+    if (v.valueMissing) return el.type === 'radio' ? 'Pick one.' : label + ' is required.';
+    if (v.badInput) return 'Enter a number.';
+    if (v.typeMismatch) return 'Enter a valid ' + label.toLowerCase() + '.';
+    if (v.rangeUnderflow || v.rangeOverflow) {
+      return el.min && el.max ? 'Use a number from ' + el.min + ' to ' + el.max + '.' : v.rangeUnderflow ? 'Use ' + el.min + ' or more.' : 'Use ' + el.max + ' or less.';
+    }
+    if (v.stepMismatch) return 'Use a whole number.';
+    if (v.patternMismatch) return el.dataset.patternMessage || el.title || 'Check the format.';
+    if (v.tooLong) return 'Use at most ' + el.maxLength + ' characters.';
+    return el.validationMessage;
+  }
+  function showError(el, text) {
+    const box = el.id && document.getElementById(el.id + '-error');
+    if (text) el.setAttribute('aria-invalid', 'true');
+    else el.removeAttribute('aria-invalid');
+    if (box) {
+      box.textContent = text || '';
+      box.hidden = !text;
+    }
+  }
+  /** True when the form may be sent; otherwise shows each problem under its field and focuses the first. */
+  function validate(form) {
+    let first = null;
+    for (const el of form.elements) {
+      if (!el.willValidate) continue;
+      const ok = el.checkValidity();
+      showError(el, ok ? '' : messageFor(el));
+      if (!ok && !first) first = el;
+    }
+    if (first) {
+      first.focus();
+      announce(messageFor(first));
+    }
+    return !first;
+  }
+  // Clear a field's error as soon as it is fixed.
+  document.addEventListener('input', (e) => {
+    const el = e.target;
+    if (el.getAttribute?.('aria-invalid') === 'true' && el.checkValidity()) showError(el, '');
+  });
+
+  // ——— ConfirmDialog: <form data-confirm="body" data-confirm-title data-confirm-action data-confirm-tone> ———
+
+  const dialog = document.getElementById('confirm-dialog');
+  function askFirst(form, submitter) {
+    const d = form.dataset;
+    if (!dialog || typeof dialog.showModal !== 'function') {
+      // No dialog on this page: fall back to the browser's own prompt.
+      if (confirm(d.confirm)) {
+        form.dataset.confirmed = '1';
+        form.requestSubmit(submitter);
+      }
+      return;
+    }
+    dialog.querySelector('#confirm-title').textContent = d.confirmTitle || 'Are you sure?';
+    dialog.querySelector('#confirm-body').textContent = d.confirm;
+    const ok = dialog.querySelector('#confirm-ok');
+    ok.textContent = d.confirmAction || 'Confirm';
+    ok.className = 'btn ' + (d.confirmTone === 'danger' ? 'btn-danger' : 'btn-primary');
+    dialog.returnValue = '';
+    dialog.addEventListener('close', () => {
+      if (dialog.returnValue !== 'confirm') return;
+      form.dataset.confirmed = '1';
+      form.requestSubmit(submitter && submitter.form === form ? submitter : undefined);
+    }, { once: true });
+    dialog.showModal();
+  }
+
+  // One submit handler, in order: validate, confirm, then a busy state on the
+  // button that sent it, so a slow deploy can't be posted twice.
   const BUSY = {
     Deploy: 'Deploying', Save: 'Saving', Create: 'Creating', Add: 'Adding', Delete: 'Deleting',
     Restart: 'Restarting', Stop: 'Stopping', Start: 'Starting', Revoke: 'Revoking', Remove: 'Removing', Rotate: 'Rotating',
   };
   document.addEventListener('submit', (e) => {
     const form = e.target;
-    const msg = form.dataset && form.dataset.confirm;
-    if (msg && !confirm(msg)) {
+    if (form.method?.toLowerCase() === 'dialog') return;
+    if (form.noValidate && !validate(form)) {
       e.preventDefault();
       return;
     }
+    if (form.dataset.confirm && form.dataset.confirmed !== '1') {
+      e.preventDefault();
+      askFirst(form, e.submitter);
+      return;
+    }
+    delete form.dataset.confirmed;
     if (e.defaultPrevented || form.method.toLowerCase() !== 'post') return;
     const btn = e.submitter || form.querySelector('[type="submit"]');
     if (!btn || btn.disabled) return;
@@ -114,9 +215,10 @@
     const busy = BUSY[verb] ? BUSY[verb] + '…' : label;
     btn.innerHTML = '<span class="spinner" aria-hidden="true"></span>';
     btn.append(document.createTextNode(busy));
-    btn.classList.add('btn-loading', 'is-busy');
+    btn.classList.add('is-busy');
     btn.setAttribute('aria-busy', 'true');
-    // Disabling inside the submit event still lets this submission go through.
+    // The button's name/value must still be sent (e.g. "Save & deploy"), so
+    // it is disabled only after the submission has been captured.
     setTimeout(() => { btn.disabled = true; }, 0);
   });
   // Coming back with the browser's back button restores the page as it was left.
@@ -125,14 +227,79 @@
     for (const btn of document.querySelectorAll('[data-idle-html]')) {
       btn.innerHTML = btn.dataset.idleHtml;
       btn.disabled = false;
-      btn.classList.remove('btn-loading', 'is-busy');
+      btn.classList.remove('is-busy');
       btn.removeAttribute('aria-busy');
       btn.style.minWidth = '';
       delete btn.dataset.idleHtml;
     }
   });
 
-  // <button data-copy-text="value"> or <button data-copy="element-id">
+  // ——— Drawers: <a data-drawer-open="id" href="fallback"> opens <dialog class="drawer" id="id"> ———
+
+  function openDrawer(d) {
+    if (d.open) d.close();
+    d.showModal();
+    d.querySelector('.drawer-body input:not([type="hidden"]), .drawer-body textarea, .drawer-body select')?.focus();
+  }
+  for (const d of document.querySelectorAll('dialog.drawer')) {
+    // Rendered open: a direct link, or a form that came back with an error.
+    if (d.hasAttribute('data-autoopen')) {
+      openDrawer(d);
+      d.querySelector('[aria-invalid="true"]')?.focus();
+    }
+    d.addEventListener('close', () => {
+      // Leave /projects/new or ?new=… once the drawer is closed.
+      const back = d.querySelector('[data-drawer-close]')?.getAttribute('href');
+      if (back && location.pathname + location.search !== back) history.replaceState(null, '', back);
+    });
+    // A click on the backdrop closes it.
+    d.addEventListener('click', (e) => { if (e.target === d) d.close(); });
+  }
+  document.addEventListener('click', (e) => {
+    const opener = e.target.closest('[data-drawer-open]');
+    if (opener) {
+      const d = document.getElementById(opener.dataset.drawerOpen);
+      if (d && typeof d.showModal === 'function') {
+        e.preventDefault();
+        openDrawer(d);
+      }
+      return;
+    }
+    const closer = e.target.closest('[data-drawer-close]');
+    if (closer) {
+      e.preventDefault();
+      closer.closest('dialog').close();
+    }
+  });
+
+  // Segmented control: <a data-kind-switch="image"> shows [data-kind-panel="image"].
+  for (const link of document.querySelectorAll('[data-kind-switch]')) {
+    link.addEventListener('click', (e) => {
+      e.preventDefault();
+      const kind = link.dataset.kindSwitch;
+      for (const l of document.querySelectorAll('[data-kind-switch]')) l.setAttribute('aria-current', String(l === link));
+      for (const p of document.querySelectorAll('[data-kind-panel]')) p.hidden = p.dataset.kindPanel !== kind;
+      document.querySelector('[data-kind-panel="' + kind + '"] input:not([type="hidden"])')?.focus();
+    });
+  }
+
+  // <form data-autosubmit>: a filter form that applies as soon as a choice changes.
+  for (const form of document.querySelectorAll('form[data-autosubmit]')) {
+    form.addEventListener('change', (e) => {
+      if (e.target.matches('select, input[type="checkbox"], input[type="date"]')) form.requestSubmit();
+    });
+  }
+
+  // A link to a row inside a collapsed section (a revoked token) opens the section.
+  const target = location.hash.length > 1 ? document.getElementById(decodeURIComponent(location.hash.slice(1))) : null;
+  const closed = target?.closest('details:not([open])');
+  if (closed) {
+    closed.open = true;
+    target.scrollIntoView({ block: 'center' });
+  }
+
+  // ——— Copy: <button data-copy-text="value"> or <button data-copy="element-id"> ———
+
   document.addEventListener('click', async (e) => {
     const btn = e.target.closest('[data-copy-text], [data-copy]');
     if (!btn) return;
@@ -149,8 +316,15 @@
       }
       return;
     }
+    announce('Copied');
     clearTimeout(btn._copyTimer);
     btn.classList.add('is-copied');
+    // A button with a text label or a tooltip says "Copied" there too.
+    const tip = btn.parentElement?.querySelector(':scope > .tooltip');
+    if (tip) {
+      tip.dataset.idleText ??= tip.textContent;
+      tip.textContent = 'Copied';
+    }
     if (btn.dataset.copy) {
       btn.dataset.idleText ??= btn.textContent;
       btn.textContent = 'Copied';
@@ -158,8 +332,64 @@
     btn._copyTimer = setTimeout(() => {
       btn.classList.remove('is-copied');
       if (btn.dataset.idleText) btn.textContent = btn.dataset.idleText;
+      if (tip?.dataset.idleText) tip.textContent = tip.dataset.idleText;
     }, 1600);
   });
+
+  // ——— Show/hide a secret: <button data-reveal="input-id" aria-pressed> ———
+
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-reveal]');
+    if (!btn) return;
+    const input = document.getElementById(btn.dataset.reveal);
+    if (!input) return;
+    const show = input.type === 'password';
+    input.type = show ? 'text' : 'password';
+    btn.setAttribute('aria-pressed', String(show));
+    btn.setAttribute('aria-label', btn.getAttribute('aria-label').replace(/^(Show|Hide)/, show ? 'Hide' : 'Show'));
+  });
+
+  // ——— Expiry presets: <button data-expiry-days="30" data-expiry-for="input-id"> ———
+
+  for (const btn of document.querySelectorAll('[data-expiry-days]')) {
+    const input = document.getElementById(btn.dataset.expiryFor);
+    if (!input) continue;
+    btn.addEventListener('click', () => {
+      const days = Number(btn.dataset.expiryDays);
+      input.value = days > 0 ? new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10) : '';
+      for (const b of document.querySelectorAll('[data-expiry-for="' + input.id + '"]')) b.setAttribute('aria-pressed', String(b === btn));
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    input.addEventListener('change', () => {
+      for (const b of document.querySelectorAll('[data-expiry-for="' + input.id + '"]')) b.setAttribute('aria-pressed', 'false');
+    });
+  }
+
+  // ——— Sidebar labels, remembered in a cookie so the next page renders the same ———
+
+  const shell = document.querySelector('.app-shell');
+  document.querySelector('[data-sidebar-toggle]')?.addEventListener('click', (e) => {
+    const btn = e.currentTarget;
+    const expanded = shell.classList.toggle('sidebar-expanded');
+    btn.setAttribute('aria-expanded', String(expanded));
+    btn.setAttribute('aria-label', expanded ? 'Hide labels' : 'Show labels');
+    const tip = btn.parentElement.querySelector('.tooltip');
+    if (tip) tip.textContent = expanded ? 'Hide labels' : 'Show labels';
+    document.cookie = 'vs_sidebar=' + (expanded ? 'expanded' : 'collapsed') + '; path=/; max-age=31536000; samesite=lax';
+  });
+
+  // ——— User menu (details/summary): close on a click outside or Escape ———
+
+  const menu = document.querySelector('.user-menu');
+  if (menu) {
+    document.addEventListener('click', (e) => { if (menu.open && !menu.contains(e.target)) menu.open = false; });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && menu.open) {
+        menu.open = false;
+        menu.querySelector('summary').focus();
+      }
+    });
+  }
 
   // Success notices fade out on their own; errors stay until the next page.
   for (const el of document.querySelectorAll('[data-autodismiss]')) {
@@ -202,6 +432,7 @@
   }
 
   // Dashboard filter: a text box and status chips over rows with data-filter-row.
+  // Exactly one chip is selected (aria-pressed), and only it is highlighted.
   for (const bar of document.querySelectorAll('[data-filter-for]')) {
     const table = document.getElementById(bar.dataset.filterFor);
     if (!table) continue;
@@ -222,11 +453,7 @@
     };
     const pick = (st) => {
       status = st;
-      for (const c of chips) {
-        const on = c.dataset.filterStatus === st;
-        c.classList.toggle('is-active', on);
-        c.setAttribute('aria-pressed', String(on));
-      }
+      for (const c of chips) c.setAttribute('aria-pressed', String(c.dataset.filterStatus === st));
       apply();
     };
     search.addEventListener('input', apply);
@@ -253,7 +480,7 @@
     sync();
   }
 
-  // ——— CPU and memory cards: <section data-metrics="/api/…" data-metrics-kind="overview|project"> ———
+  // ——— CPU and memory: <section data-metrics="/api/…" data-metrics-kind="overview|project"> ———
 
   function fmtBytes(n) {
     if (!Number.isFinite(n) || n <= 0) return ['0', 'B'];
@@ -265,21 +492,18 @@
   const bytes = (n) => fmtBytes(n).join(' ');
   const num = (n) => (n < 10 ? n.toFixed(1) : String(Math.round(n)));
   const clamp = (n) => Math.max(0, Math.min(100, n || 0));
-
-  function usageCellHtml(text, share, title) {
-    const bar = share == null ? '' : '<span class="usage-bar"><i style="width:' + clamp(share) + '%"></i></span>';
-    return '<span class="usage" title="' + (title || '') + '">' + text + bar + '</span>';
-  }
+  const esc = (s) => String(s).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch]);
+  const usageHtml = (text, title) => '<span class="usage"' + (title ? ' title="' + esc(title) + '"' : '') + '>' + esc(text) + '</span>';
   const idle = '<span class="text-subtle">—</span>';
 
   for (const panel of document.querySelectorAll('[data-metrics]')) {
     const kind = panel.dataset.metricsKind;
-    const bind = (key, text) => { const el = panel.querySelector('[data-bind="' + key + '"]'); if (el) el.textContent = text; };
+    const bind = (key, text) => { for (const el of panel.querySelectorAll('[data-bind="' + key + '"]')) el.textContent = text; };
     const errorBox = panel.querySelector('[data-bind-error]');
     let timer = null;
     let failures = 0;
 
-    /** Fills one card: value + unit, a detail line, and a meter that warns past 75% and 90%. */
+    /** Fills one figure: value + unit, a detail line, and a meter that warns past 75% and 90%. */
     const tile = (key, value, unit, sub, meter) => {
       bind(key, value);
       bind(key + '-unit', unit);
@@ -295,7 +519,11 @@
       const h = data.host;
       panel.setAttribute('aria-busy', 'false');
       panel.classList.add('is-ready');
-      bind('updated', 'updated ' + new Date(h.at).toLocaleTimeString());
+      const updated = panel.querySelector('[data-bind="updated"]');
+      if (updated) {
+        updated.textContent = 'updated ' + fmtAbs(h.at).slice(11);
+        updated.title = fmtAbs(h.at);
+      }
       errorBox.hidden = !data.dockerError;
       if (data.dockerError) bind('error', data.dockerError);
 
@@ -307,14 +535,14 @@
         const a = data.apps;
         const [appsMem, appsUnit] = fmtBytes(a.memBytes);
         const n = data.projects.length;
-        tile('apps-cpu', num(a.cpuShare), '%', n === 0 ? 'nothing running' : n + ' running project' + (n === 1 ? '' : 's'), a.cpuShare);
+        tile('apps-cpu', num(a.cpuShare), '%', n === 0 ? 'nothing running' : n + ' running', a.cpuShare);
         tile('apps-mem', appsMem, appsUnit, num(a.memShare) + '% of the VM', a.memShare);
         const byName = new Map(data.projects.map((p) => [p.project, p]));
         for (const td of document.querySelectorAll('td[data-project][data-usage]')) {
           const u = byName.get(td.dataset.project);
           td.innerHTML = !u ? idle : td.dataset.usage === 'cpu'
-            ? usageCellHtml(num(u.cpuShare) + '%', u.cpuShare, (u.cpuPercent / 100).toFixed(2) + ' cores')
-            : usageCellHtml(bytes(u.memBytes), u.memShare, num(u.memShare) + '% of the VM');
+            ? usageHtml(num(u.cpuShare) + '%', (u.cpuPercent / 100).toFixed(2) + ' cores')
+            : usageHtml(bytes(u.memBytes), num(u.memShare) + '% of the VM');
         }
       } else {
         const u = data.usage;
@@ -334,10 +562,10 @@
           const c = byName.get(td.dataset.ct);
           const f = td.dataset.usage;
           td.innerHTML = !c ? idle
-            : f === 'cpu' ? usageCellHtml(num(c.cpuShare) + '%', c.cpuShare, (c.cpuPercent / 100).toFixed(2) + ' cores')
-            : f === 'mem' ? usageCellHtml(bytes(c.memBytes), c.memLimitBytes ? (c.memBytes / c.memLimitBytes) * 100 : null, 'limit ' + bytes(c.memLimitBytes))
-            : f === 'net' ? '<span class="usage">' + bytes(c.netRxBytes) + ' / ' + bytes(c.netTxBytes) + '</span>'
-            : '<span class="usage">' + c.pids + '</span>';
+            : f === 'cpu' ? usageHtml(num(c.cpuShare) + '%', (c.cpuPercent / 100).toFixed(2) + ' cores')
+            : f === 'mem' ? usageHtml(bytes(c.memBytes), c.memLimitBytes ? 'limit ' + bytes(c.memLimitBytes) : 'no limit')
+            : f === 'net' ? usageHtml(bytes(c.netRxBytes) + ' / ' + bytes(c.netTxBytes))
+            : usageHtml(String(c.pids));
         }
       }
     };

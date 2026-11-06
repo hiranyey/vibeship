@@ -78,9 +78,15 @@ test('the dashboard and every page render with security headers', async (t) => {
   assert.match(home, /No projects yet/);
   assert.match(home, /data-metrics="\/api\/metrics"/, 'the dashboard shows the server panel');
   assert.match(home, /data-copy-text="http:\/\/vibeship\.localhost:8080\/mcp"/, 'the MCP URL has a copy button');
-  // The topbar shows only the log out button, not the user's name, email or an admin badge.
-  assert.match(home, /<form class="tooltip-wrap" method="post" action="\/auth\/logout">/);
-  assert.doesNotMatch(home, /admin@example\.com|class="user-chip"|class="brand-sub"/);
+  // The topbar has a user menu with the signed-in email and Log out; breadcrumbs start next to the logo.
+  assert.match(home, /<details class="user-menu">[\s\S]*admin@example\.com[\s\S]*<form method="post" action="\/auth\/logout">/);
+  assert.match(home, /<nav class="breadcrumb" aria-label="Breadcrumb"><span class="breadcrumb-current" aria-current="page">Projects<\/span>/);
+  // One confirm dialog for destructive actions, and no stat cards duplicating the filter chips.
+  assert.match(home, /<dialog class="modal" id="confirm-dialog"/);
+  assert.doesNotMatch(home, /class="stat-strip"/);
+  // New project opens a drawer; /projects/new is the same page with it open.
+  assert.match(home, /data-drawer-open="new-project"/);
+  assert.match(await (await b.get('/projects/new?kind=compose')).text(), /<dialog class="drawer is-wide" id="new-project"[^>]* open data-autoopen/);
 });
 
 test('static assets are served', async (t) => {
@@ -124,7 +130,7 @@ test('the wizard creates an image project with env, deploys it, and shows the li
 
   await b.queue.idle();
   const done = await (await b.get(to)).text();
-  assert.match(done, /pill-healthy" data-status="healthy"/);
+  assert.match(done, /tone-success" data-status="healthy"/);
   assert.doesNotMatch(done, /data-stream=/, 'a finished deploy does not stream');
   assert.match(done, /Deploy #1 is live/);
 
@@ -151,7 +157,7 @@ test('a deploy that has not finished streams its log from where the page left of
   const text = await (await b.get(`/deploys/${id}`)).text();
   assert.match(text, new RegExp(`data-stream="/api/deploys/${id}/logs\\?after=1"`));
   assert.match(text, /first line/);
-  assert.match(text, /pill-queued" data-status="queued"/);
+  assert.match(text, /tone-neutral" data-status="queued"/);
 });
 
 test('wizard errors keep what was typed, except secrets', async (t) => {
@@ -213,7 +219,7 @@ test('compose projects: create, save a new version and deploy an older one', asy
   assert.match(saved.to, /^\/deploys\/\d+$/);
   await b.queue.idle();
   const versions = await (await b.get('/projects/blog/compose')).text();
-  assert.match(versions, /v2<\/a> <span class="badge">live/);
+  assert.match(versions, /v2<\/a> <span class="tag">live/);
   assert.match(await (await b.get('/projects/blog/compose/1')).text(), /nginx:1\.29/);
   const v2 = await (await b.get('/projects/blog/compose/2')).text();
   assert.match(v2, /Changes from v1/);
@@ -223,7 +229,7 @@ test('compose projects: create, save a new version and deploy an older one', asy
 
   const again = await b.follow(await b.post('/projects/blog/deploy', { composeVersion: '1' }));
   await b.queue.idle();
-  assert.match(await (await b.get(again.to)).text(), /compose version 1/);
+  assert.match(await (await b.get(again.to)).text(), /Compose version 1/);
   assert.equal(b.projects.getByName('blog').deployedComposeVersion, 1);
   assert.equal((await b.get('/projects/blog/compose/9')).status, 404);
 });
@@ -369,10 +375,62 @@ test('brand icons are served and every page uses the mark instead of a text badg
     assert.match(res.headers.get('content-type')!, type);
   }
   const home = await (await b.get('/')).text();
-  assert.match(home, /<img class="brand-mark" src="\/static\/vibeship-mark\.svg"/);
+  // The header uses the simplified mark (the favicon); the login card the full one.
+  assert.match(home, /<img class="brand-mark" src="\/favicon\.svg"/);
   assert.match(home, /<link rel="icon" href="\/favicon\.svg"/);
   assert.doesNotMatch(home, />VS</);
   const login = await (await b.app.request('/auth/login')).text();
   assert.match(login, /vibeship-mark\.svg/);
   assert.doesNotMatch(login, />VS</);
+});
+
+test('names over raw IDs, revoked tokens apart, audit sentences and filters, Save & deploy', async (t) => {
+  const b = browser(t);
+  b.fakeDocker.push(REF, 'healthy');
+
+  // A token made in the UI acts through the API; pages name it, never "token:N".
+  const created = await (await b.post('/tokens', { name: 'ci-bot', scope: 'deploy', expiresOn: '' })).text();
+  const token = /id="once-value">(vs_[^<]+)</.exec(created)![1]!;
+  const dup = await b.post('/tokens', { name: 'ci-bot', scope: 'read', expiresOn: '' });
+  assert.equal(dup.status, 400);
+  assert.match(await dup.text(), /id="f-name-error">A token named &quot;ci-bot&quot; already exists/, 'the error sits under the field');
+
+  const res = await b.app.request('/api/projects', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ kind: 'image', name: 'hello', imageRef: REF, containerPort: 8080 }),
+  });
+  assert.equal(res.status, 201);
+  const tokenId = b.tokens.list().find((x) => x.name === 'ci-bot')!.id;
+  const overview = await (await b.get('/projects/hello')).text();
+  assert.match(overview, new RegExp(`by <a href="/tokens#token-${tokenId}" title="token:${tokenId}">ci-bot</a>`));
+  assert.doesNotMatch(overview, /by token:\d/);
+  assert.match(overview, /No health path, healthy while the container runs/);
+  assert.match(overview, /No limit: this app can use all of the VM/);
+  assert.match(overview, /href="\/projects\/hello\/settings#webhook">Create one/);
+  // The hostname shows once, in the header, with a copy button.
+  assert.equal(overview.match(/>hello\.localhost</g)?.length, 1);
+  assert.match(overview, /data-confirm-title="Stop hello\?"[^>]*data-confirm-tone="danger"/);
+
+  // Save & deploy saves, then starts a deploy.
+  const deployed = await b.follow(await b.post('/projects/hello/settings', { hostname: 'hello.localhost', imageRef: REF, containerPort: '8080', deploy: '1' }));
+  assert.match(deployed.to, /^\/deploys\/\d+$/);
+  await b.queue.idle();
+
+  // Revoked tokens move to a collapsed section and say when.
+  await b.follow(await b.post(`/tokens/${tokenId}/revoke`));
+  const tokens = await (await b.get('/tokens')).text();
+  assert.match(tokens, /<details class="collapse" id="revoked-tokens">[\s\S]*<tr class="is-dimmed" id="token-\d+">[\s\S]*Revoked (just now|\d+[mhd] ago)/);
+  assert.match(tokens, /data-copy-text="http:\/\/vibeship\.localhost:8080\/mcp"/);
+
+  // The audit log reads as sentences, with danger for destructive actions.
+  const audit = await (await b.get('/audit')).text();
+  assert.match(audit, /<th colspan="5" scope="colgroup">Today<\/th>/);
+  assert.match(audit, /Created image project <a href="\/projects\/hello" title="project:\d+"><strong>hello<\/strong><\/a> at <span class="mono">hello\.localhost<\/span>/);
+  assert.match(audit, /<span class="tag tone-danger">token\.revoke<\/span>/);
+  assert.match(audit, /<details class="raw"><summary>Raw<\/summary>/);
+  const onlyRevokes = await (await b.get('/audit?action=token.revoke&hideAuth=1')).text();
+  assert.match(onlyRevokes, /token\.revoke/);
+  assert.doesNotMatch(onlyRevokes, /tag">project\.create</);
+  assert.match(onlyRevokes, /<option value="token\.revoke" selected>/);
 });

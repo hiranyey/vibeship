@@ -94,3 +94,12 @@ test('webhook tokens: rotating replaces the old one, and only image projects hav
   assert.deepEqual(db.all<{ action: string }>(`SELECT action FROM audit_log WHERE action LIKE 'webhook.%' ORDER BY id`).map((r) => r.action),
     ['webhook.create', 'webhook.rotate']);
 });
+
+test('active tokens have distinct names; a revoked token frees its name', () => {
+  const { tokens, ctx } = setup();
+  const first = tokens.create(ctx, { name: 'ci', scope: 'deploy' });
+  assert.throws(() => tokens.create(ctx, { name: 'ci', scope: 'read' }), (err: unknown) =>
+    isCode('conflict')(err) && (err as AppError).details?.issues !== undefined && /already exists/.test((err as AppError).message));
+  tokens.revoke(ctx, first.apiToken.id);
+  assert.equal(tokens.create(ctx, { name: 'ci', scope: 'read' }).apiToken.name, 'ci');
+});

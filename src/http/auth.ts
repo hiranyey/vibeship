@@ -1,5 +1,4 @@
 import type { Context, MiddlewareHandler } from 'hono';
-import { getConnInfo } from '@hono/node-server/conninfo';
 import { getCookie } from 'hono/cookie';
 import type { RequestContext } from '../actor.ts';
 import type { Config } from '../config.ts';
@@ -8,6 +7,7 @@ import type { TokenScope } from '../schemas.ts';
 import type { Services } from '../services/index.ts';
 import type { User } from '../services/sessions.ts';
 import { type ApiToken, scopeCovers } from '../services/tokens.ts';
+import { clientIp, type TrustedProxies } from './client-ip.ts';
 
 /** Who is making the request. A logged-in user is the admin, so a session carries admin scope. */
 export type Principal =
@@ -27,21 +27,6 @@ export function cookieSettings(config: Pick<Config, 'publicUrl'>) {
   };
 }
 
-/**
- * The client address for the audit log: the last hop Caddy added to
- * X-Forwarded-For, else the socket peer. Apps on `web` can reach Vibeship
- * directly and set this header themselves, so it is informational only.
- */
-export function clientIp(c: Context): string | null {
-  const forwarded = c.req.header('x-forwarded-for');
-  if (forwarded) return forwarded.split(',').at(-1)!.trim() || null;
-  try {
-    return getConnInfo(c).remote.address ?? null;
-  } catch {
-    return null; // No socket, e.g. app.request() in tests.
-  }
-}
-
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 /**
@@ -51,12 +36,12 @@ const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
  * API with the admin's cookie: cookie-authenticated writes must also come
  * from Vibeship's own origin.
  */
-export function authenticate(config: Pick<Config, 'publicUrl'>, services: Services): MiddlewareHandler<AppEnv> {
+export function authenticate(config: Pick<Config, 'publicUrl'>, services: Services, proxies: TrustedProxies): MiddlewareHandler<AppEnv> {
   const cookies = cookieSettings(config);
   const origin = new URL(config.publicUrl).origin;
 
   return async (c, next) => {
-    const ip = clientIp(c);
+    const ip = clientIp(c, proxies);
     c.set('ip', ip);
     c.set('principal', null);
 

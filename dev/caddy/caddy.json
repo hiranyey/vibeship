@@ -23,7 +23,13 @@
                       "handle": [{ "handler": "vars", "log_skip": true }]
                     },
                     {
-                      "handle": [{ "handler": "reverse_proxy", "upstreams": [{ "dial": "vibeship:3000" }] }]
+                      "handle": [
+                        {
+                          "handler": "reverse_proxy",
+                          "upstreams": [{ "dial": "vibeship:3000" }],
+                          "headers": { "request": { "set": { "X-Real-Ip": ["{http.vars.client_ip}"] } } }
+                        }
+                      ]
                     }
                   ]
                 }

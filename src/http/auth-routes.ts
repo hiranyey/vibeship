@@ -20,6 +20,33 @@ export function safeReturnTo(value: string | undefined): string {
   return value && /^\/(?![/\\])/.test(value) ? value : '/';
 }
 
+/**
+ * A name for the identity provider, from its issuer URL, for "Continue
+ * with …". Unknown issuers are just "SSO".
+ */
+export function providerName(issuer: string | undefined): string {
+  let host: string;
+  let path: string;
+  try {
+    ({ hostname: host, pathname: path } = new URL(issuer ?? ''));
+  } catch {
+    return 'SSO';
+  }
+  const known: Array<[RegExp, string]> = [
+    [/^accounts\.google\.com$/, 'Google'],
+    [/(^|\.)microsoftonline\.com$/, 'Microsoft'],
+    [/(^clerk\.|\.clerk\.accounts\.dev$)/, 'Clerk'],
+    [/\.okta(preview)?\.com$/, 'Okta'],
+    [/\.auth0\.com$/, 'Auth0'],
+    [/^gitlab\.com$/, 'GitLab'],
+    [/^cognito-idp\.[a-z0-9-]+\.amazonaws\.com$/, 'Amazon Cognito'],
+    [/\.zitadel\.cloud$/, 'Zitadel'],
+  ];
+  for (const [re, name] of known) if (re.test(host)) return name;
+  if (/\/realms\/[^/]+\/?$/.test(path)) return 'Keycloak';
+  return 'SSO';
+}
+
 /** A small standalone page in the app's style: a centred card, no navigation. */
 function page(c: Context<AppEnv>, opts: { title: string; host: string; status?: 200 | 400 | 403 | 502 | 503; heading?: boolean }, body: unknown) {
   c.header('Content-Security-Policy', CSP);
@@ -36,12 +63,10 @@ function page(c: Context<AppEnv>, opts: { title: string; host: string; status?: 
         <link rel="stylesheet" href="${assetUrl('vibeship.css')}" />
       </head>
       <body class="auth-page">
-        <main class="card card-pad auth-card">
-          <div class="topbar-brand">
-            <img class="brand-mark" src="/static/vibeship-mark.svg" alt="" width="28" height="28" />
-            <div>
-              <div class="brand-title">Vibeship</div>
-            </div>
+        <main class="card auth-card">
+          <div class="auth-brand">
+            <img class="brand-mark" src="/static/vibeship-mark.svg" alt="" width="36" height="36" />
+            <span class="brand-title">Vibeship</span>
           </div>
           ${opts.heading === false ? '' : html`<h1 class="auth-title">${opts.title}</h1>`}
           ${body}
@@ -70,9 +95,9 @@ export function authRoutes(deps: { config: Config; services: Services; oidc: Oid
     if (c.get('principal')?.kind === 'user') return c.redirect(returnTo, 302);
     if (!oidc) return notConfigured(c);
     const start = returnTo === '/' ? '/auth/start' : `/auth/start?returnTo=${encodeURIComponent(returnTo)}`;
-    return page(c, { title: 'Log in', host, heading: false }, html`
-      <p class="text-muted mt-0">Sign in with your identity provider to manage projects and deploys.</p>
-      <a class="btn btn-primary btn-lg auth-button" href="${start}">Log in with SSO</a>`);
+    return page(c, { title: 'Sign in', host }, html`
+      <p class="text-muted">Sign in to manage projects and deploys.</p>
+      <a class="btn btn-primary btn-lg auth-button" href="${start}">Continue with ${providerName(config.oidc?.issuer)}</a>`);
   });
 
   app.get('/start', async (c) => {

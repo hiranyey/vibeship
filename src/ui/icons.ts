@@ -12,12 +12,19 @@ const PATHS = {
   rocket: '<path d="M9.5 2.2c2.4-.6 4.3-.4 4.3-.4s.2 1.9-.4 4.3c-.6 2.3-2.6 4.4-4.9 5.6L6.3 9.5 4.1 7.3C5.3 5 7.2 2.8 9.5 2.2z"/><path d="M6.3 9.5L4 11.8M4.1 7.3l-2 .4 1.4-2.4 2.4-.3M8.7 11.7l-.4 2 2.4-1.4.3-2.4"/><circle cx="10.5" cy="5.5" r="1"/>',
   trash: '<path d="M2.5 4h11M6 4V2.5h4V4M4 4l.7 9.5h6.6L12 4M6.8 6.5v4.5M9.2 6.5v4.5"/>',
   mcp: '<path d="M6 2v3M10 2v3M4 5h8v2.5a4 4 0 0 1-8 0zM8 11.5V14"/>',
+  external: '<path d="M9.5 2.5h4v4M13.5 2.5L7.5 8.5M12 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3"/>',
+  eye: '<path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/>',
+  'eye-off': '<path d="M6.6 3.7A6.6 6.6 0 0 1 8 3.5C12 3.5 14.5 8 14.5 8a12 12 0 0 1-1.7 2.3M9.4 9.5A2 2 0 0 1 6.5 6.6M4.3 4.9C2.6 6 1.5 8 1.5 8S4 12.5 8 12.5c1.2 0 2.3-.4 3.2-1M2 2l12 12"/>',
+  chevron: '<path d="M6 3.5L10.5 8 6 12.5"/>',
+  'chevron-down': '<path d="M3.5 6L8 10.5 12.5 6"/>',
+  close: '<path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/>',
+  warning: '<path d="M8 2L14.5 13.5h-13z"/><path d="M8 6.5v3M8 11.6v.1"/>',
 } as const;
 
 export type IconName = keyof typeof PATHS;
 
 export function icon(name: IconName, size = 16) {
   return raw(
-    `<svg class="icon" viewBox="0 0 16 16" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${PATHS[name]}</svg>`,
+    `<svg class="icon icon-${name}" viewBox="0 0 16 16" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${PATHS[name]}</svg>`,
   );
 }

@@ -20,8 +20,10 @@ function harness(t: TestContext) {
   t.after(() => Promise.all(clients.map((c) => c.close())));
 
   /** An MCP client for a new token of the given scope, talking to the app in-process. */
+  let made = 0;
   async function agent(scope: TokenScope) {
-    const { token } = s.tokens.create(s.ctx, { name: `agent-${scope}`, scope });
+    // Active tokens need distinct names.
+    const { token } = s.tokens.create(s.ctx, { name: `agent-${scope}-${++made}`, scope });
     const client = new Client({ name: 'test-agent', version: '1.0.0' });
     await client.connect(new StreamableHTTPClientTransport(new URL(`${ORIGIN}/mcp`), {
       requestInit: { headers: { authorization: `Bearer ${token}` } },

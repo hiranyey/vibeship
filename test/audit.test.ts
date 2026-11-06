@@ -41,3 +41,28 @@ test('an audit row inside a rolled-back transaction is discarded', () => {
   );
   assert.deepEqual(audit.list(), []);
 });
+
+test('filters by action, actor, target type, time and action prefix, and lists the facets', () => {
+  const { audit, db, ctx, userId } = setup();
+  const tokenId = db.run(`INSERT INTO api_tokens (name, token_hash, scope) VALUES ('agent', 'h', 'deploy')`).lastInsertRowid;
+  audit.record(ctx, 'auth.login', `user:${userId}`);
+  audit.record(ctx, 'project.create', 'project:1', { name: 'a' });
+  audit.record({ actor: { type: 'token', tokenId } }, 'project.delete', 'project:1', { name: 'a' });
+  audit.record({ actor: { type: 'system' } }, 'deploy.request', 'deploy:7', { trigger: 'webhook' });
+  db.run(`UPDATE audit_log SET ts = '2026-01-02T10:00:00.000Z' WHERE action = 'project.create'`);
+
+  const actions = (f: Parameters<typeof audit.list>[0]) => audit.list(f).map((e) => e.action);
+  assert.deepEqual(actions({ action: 'project.delete' }), ['project.delete']);
+  assert.deepEqual(actions({ actor: { type: 'token', id: tokenId } }), ['project.delete']);
+  assert.deepEqual(actions({ actor: { type: 'user', id: userId } }), ['project.create', 'auth.login']);
+  assert.deepEqual(actions({ actor: { type: 'system' } }), ['deploy.request']);
+  assert.deepEqual(actions({ targetType: 'project' }), ['project.delete', 'project.create']);
+  assert.deepEqual(actions({ targetType: 'proj' }), [], 'a target type matches whole, not as a prefix');
+  assert.deepEqual(actions({ since: '2026-01-02T00:00:00.000Z', until: '2026-01-03T00:00:00.000Z' }), ['project.create']);
+  assert.deepEqual(actions({ excludeActionPrefixes: ['auth.'] }), ['deploy.request', 'project.delete', 'project.create']);
+
+  const f = audit.facets();
+  assert.deepEqual(f.actions, ['auth.login', 'deploy.request', 'project.create', 'project.delete']);
+  assert.deepEqual(f.targetTypes, ['deploy', 'project', 'user']);
+  assert.deepEqual(f.actors, [{ type: 'system' }, { type: 'token', id: tokenId }, { type: 'user', id: userId }]);
+});

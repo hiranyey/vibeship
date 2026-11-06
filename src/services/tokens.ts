@@ -1,7 +1,7 @@
 import type { RequestContext } from '../actor.ts';
 import { randomToken, sha256Hex } from '../crypto/tokens.ts';
 import type { Db } from '../db/db.ts';
-import { notFound } from '../errors.ts';
+import { AppError, notFound } from '../errors.ts';
 import { CreateTokenInput, type TokenScope } from '../schemas.ts';
 import type { AuditLog } from './audit.ts';
 import { parseInput } from './validate.ts';
@@ -58,6 +58,16 @@ export class TokenService {
     const token = `${TOKEN_PREFIX}${randomToken()}`;
     const createdBy = ctx.actor.type === 'user' ? ctx.actor.userId : null;
     return this.#db.transaction(() => {
+      // Names tell tokens apart in the UI and the audit log, so two usable
+      // tokens can't share one. A revoked or expired token's name is free again.
+      const taken = this.#db.get<{ id: number }>(
+        `SELECT id FROM api_tokens WHERE name = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ${NOW})`,
+        input.name,
+      );
+      if (taken) {
+        const why = `A token named "${input.name}" already exists; pick another name or revoke that one first`;
+        throw new AppError('conflict', `name: ${why}`, { issues: [{ path: 'name', message: why }] });
+      }
       const { lastInsertRowid: id } = this.#db.run(
         'INSERT INTO api_tokens (name, token_hash, scope, created_by, expires_at) VALUES (?, ?, ?, ?, ?)',
         input.name, sha256Hex(token), input.scope, createdBy, input.expiresAt ? new Date(input.expiresAt).toISOString() : null,
