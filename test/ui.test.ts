@@ -77,7 +77,7 @@ test('the dashboard and every page render with security headers', async (t) => {
   const home = await (await b.get('/')).text();
   assert.match(home, /No projects yet/);
   assert.match(home, /data-metrics="\/api\/metrics"/, 'the dashboard shows the server panel');
-  assert.match(home, /data-copy-text="http:\/\/vibeship\.localhost:8080\/mcp"/, 'the MCP URL has a copy button');
+  assert.doesNotMatch(home, /Connect MCP/, 'the MCP URL lives on the API tokens page, not in the sidebar');
   // The topbar has a Log out button and no email. A top-level page has no breadcrumb:
   // its header already names it.
   assert.match(home, /<form class="account" method="post" action="\/auth\/logout">/);
@@ -86,9 +86,14 @@ test('the dashboard and every page render with security headers', async (t) => {
   // One confirm dialog for destructive actions, and no stat cards duplicating the filter chips.
   assert.match(home, /<dialog class="modal" id="confirm-dialog"/);
   assert.doesNotMatch(home, /class="stat-strip"/);
-  // New project opens a drawer; /projects/new is the same page with it open.
-  assert.match(home, /data-drawer-open="new-project"/);
-  assert.match(await (await b.get('/projects/new?kind=compose')).text(), /<dialog class="drawer is-wide" id="new-project"[^>]* open data-autoopen/);
+  // New project is its own page, with the kind picked from the query.
+  assert.match(home, /<a class="btn btn-primary" href="\/projects\/new">/);
+  assert.doesNotMatch(home, /id="new-project"/);
+  const compose = await (await b.get('/projects/new?kind=compose')).text();
+  assert.match(compose, /<h1[^>]*>New project<\/h1>/);
+  assert.match(compose, /data-kind-switch="compose" aria-current="true"/);
+  assert.match(compose, /<form class="form-page" method="post" action="\/projects\/new" novalidate data-kind-panel="compose">/);
+  assert.match(compose, /<form class="form-page"[^>]*data-kind-panel="image" hidden>/);
 });
 
 test('static assets are served', async (t) => {

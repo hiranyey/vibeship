@@ -10,7 +10,7 @@ import type { Services } from '../services/index.ts';
 import type { Project } from '../services/projects.ts';
 import { parseInput } from '../services/validate.ts';
 import {
-  absoluteTime, ACTIONS, ago, alert, checkbox, confirmAttrs, copyable, copyButton, dataTable, drawer, duration, emptyRow, emptyState, externalLink, field,
+  absoluteTime, ACTIONS, ago, alert, checkbox, confirmAttrs, copyable, copyButton, dataTable, duration, emptyRow, emptyState, externalLink, field,
   type FieldErrors, fieldErrors, type Html, imageVersion, linkButton, pageHeader, postButton, selectField, shortDigest, shownOnce,
   statusBadge, tag, textarea, type Tone,
 } from './components.ts';
@@ -81,7 +81,7 @@ const MEM_HELP = 'Empty: no limit. Use m or g, like 512m or 1g.';
 const OWNER_HELP = 'Use 1000:1000 for images that run as the node user. Empty: owned by root.';
 const REGISTRY_HELP = 'Auto picks the login whose host matches the image.';
 
-/** Dashboard, the New project drawer, project pages and the deploy view. */
+/** Dashboard, the New project page, project pages and the deploy view. */
 export function projectPages(deps: { config: Config; services: Services; view: View }): Hono<AppEnv> {
   const { services: s, view } = deps;
   const app = new Hono<AppEnv>();
@@ -121,24 +121,23 @@ export function projectPages(deps: { config: Config; services: Services; view: V
     </div>
   </details>`;
 
-  // Dashboard and the New project drawer
+  // Dashboard and the New project page
 
   type NewProject = { kind: Kind; form: Form; error?: string; errors?: FieldErrors };
 
-  const dashboard = (c: Context<AppEnv>, creating?: NewProject) => {
+  const dashboard = (c: Context<AppEnv>) => {
     const projects = s.projects.list();
     const rows = projects.map((p) => ({ p, last: s.deploys.list(p.id, 1)[0] ?? null }));
     const count = (st: string) => projects.filter((p) => p.status === st).length;
     const lastDeploy = rows.map((r) => r.last?.createdAt).filter(Boolean).sort().at(-1);
     const chips = [['all', 'All', projects.length], ...(['running', 'deploying', 'failed', 'stopped'] as const).map((st) => [st, st[0]!.toUpperCase() + st.slice(1), count(st)])] as Array<[string, string, number]>;
     return view.render(c, {
-      title: creating ? 'New project' : 'Projects',
+      title: 'Projects',
       nav: 'projects',
-      status: creating?.error ? 400 : 200,
       crumbs: [{ label: 'Projects' }],
       body: html`
         ${pageHeader('Projects', html`<span>Image and compose apps served behind Caddy${lastDeploy ? html` · last deploy ${ago(lastDeploy)}` : ''}</span>`,
-          linkButton('/projects/new', 'New project', { variant: 'primary', icon: 'plus', drawer: 'new-project' }))}
+          linkButton('/projects/new', 'New project', { variant: 'primary', icon: 'plus' }))}
         ${hostPanel()}
         <div class="stack">
           ${projects.length > 0
@@ -156,7 +155,7 @@ export function projectPages(deps: { config: Config; services: Services; view: V
             body: html`<tbody>
               ${rows.length === 0
                 ? emptyRow(10, emptyState('No projects yet', 'Ship a container image or a compose file. Agents can create projects too, over MCP.',
-                    linkButton('/projects/new', 'New project', { variant: 'primary', size: 'sm', icon: 'plus', drawer: 'new-project' })))
+                    linkButton('/projects/new', 'New project', { variant: 'primary', size: 'sm', icon: 'plus' })))
                 : rows.map(({ p, last }) => html`<tr data-filter-row data-name="${p.name} ${p.hostname}" data-status="${p.status}"${p.status === 'deploying' ? html` data-watch="/api/projects/${p.id}" data-watch-status="deploying"` : ''}>
                   <td class="cell-name cell-nowrap"><a href="${base(p)}">${p.name}</a></td>
                   <td>${statusBadge(p.status)}</td>
@@ -172,66 +171,101 @@ export function projectPages(deps: { config: Config; services: Services; view: V
               <tr class="empty-row" data-filter-empty hidden><td colspan="10" class="text-muted">No projects match. <button class="link-btn" type="button" data-filter-reset>Clear the filter</button></td></tr>
             </tbody>`,
           })}
-        </div>
-        ${newProjectDrawer(creating)}`,
+        </div>`,
     });
   };
 
-  const newProjectDrawer = (creating?: NewProject) => {
-    const kind = creating?.kind ?? 'image';
+  const KINDS: Array<[Kind, string, string]> = [
+    ['image', 'Image', 'One container image from a registry, deployed by digest. CI pushes the image and posts the digest to the webhook.'],
+    ['compose', 'Compose', 'A docker compose file with one routed service and any helpers (a database, a worker), checked against an allowlist.'],
+  ];
+
+  /** The New project page: pick the kind, then one form per kind, in cards like Settings. */
+  const newProject = (c: Context<AppEnv>, creating: NewProject) => {
+    const kind = creating.kind;
     const regs = registryOptions();
     const panel = (k: Kind) => {
-      const f = creating?.kind === k ? creating.form : {};
-      const e = creating?.kind === k ? creating.errors ?? {} : {};
+      const f = kind === k ? creating.form : {};
+      const e = kind === k ? creating.errors ?? {} : {};
       const id = (name: string) => `new-${k}-${name}`;
-      return html`<form class="form-stack" method="post" action="/projects/new" novalidate data-kind-panel="${k}"${k === kind ? '' : raw(' hidden')}>
+      return html`<form class="form-page" method="post" action="/projects/new" novalidate data-kind-panel="${k}"${k === kind ? '' : raw(' hidden')}>
         <input type="hidden" name="kind" value="${k}" />
-        ${creating?.kind === k && creating.error ? alert('danger', creating.error, 'The project was not created') : ''}
-        <div class="form-grid">
-          ${field({ label: 'Name', name: 'name', id: id('name'), value: f.name, required: true, error: e.name, help: 'Lowercase letters, digits and hyphens.' })}
-          ${field({ label: 'Hostname', name: 'hostname', id: id('hostname'), value: f.hostname, error: e.hostname, placeholder: `e.g. <name>.${deps.config.baseDomain}`, help: 'Empty: the name on the base domain.' })}
-          ${k === 'image'
-            ? html`${field({ label: 'Image', name: 'imageRef', id: id('imageRef'), value: f.imageRef, required: true, span: 12, error: e.imageRef, placeholder: 'e.g. registry.example.com/library/app:latest', help: 'Full image reference including tag.' })}
-              ${field({ label: 'Container port', name: 'containerPort', id: id('containerPort'), value: f.containerPort, type: 'number', required: true, span: 4, error: e.containerPort, placeholder: 'e.g. 8080', attrs: 'min="1" max="65535" inputmode="numeric"' })}
-              ${field({ label: 'Health path', name: 'healthPath', id: id('healthPath'), value: f.healthPath, span: 8, error: e.healthPath, placeholder: 'e.g. /health', help: HEALTH_HELP })}
-              ${selectField({ label: 'Registry login', name: 'registryId', id: id('registryId'), value: f.registryId, options: regs, span: 12, error: e.registryId, help: REGISTRY_HELP })}
-              ${field({ label: 'Memory limit', name: 'memLimit', id: id('memLimit'), value: f.memLimit, error: e.memLimit, placeholder: 'e.g. 512m', help: MEM_HELP })}
-              ${field({ label: 'Data owner (uid:gid)', name: 'dataOwner', id: id('dataOwner'), value: f.dataOwner, error: e.dataOwner, placeholder: 'e.g. 1000:1000', help: OWNER_HELP })}`
-            : html`${textarea({ label: 'compose.yaml', name: 'composeYaml', id: id('composeYaml'), value: f.composeYaml ?? SAMPLE_COMPOSE, code: true, rows: 14, required: true, span: 12, error: e.composeYaml, help: html`No privileged settings, ports only on <code class="inline">127.0.0.1</code>, bind mounts only of <code class="inline">./data</code>. Env vars below reach it as <code class="inline">\${NAME}</code> or with <code class="inline">env_file: .env</code>.` })}
-              ${field({ label: 'Routed service', name: 'routedService', id: id('routedService'), value: f.routedService ?? 'app', required: true, span: 4, error: e.routedService, help: 'The service Caddy sends traffic to.' })}
-              ${field({ label: 'Port', name: 'port', id: id('port'), value: f.port, type: 'number', required: true, span: 4, error: e.port, placeholder: 'e.g. 80', attrs: 'min="1" max="65535" inputmode="numeric"' })}
-              ${field({ label: 'Health path', name: 'healthPath', id: id('healthPath'), value: f.healthPath, span: 4, error: e.healthPath, placeholder: 'e.g. /health', help: HEALTH_HELP })}`}
-          ${textarea({ label: 'Env vars', name: 'env', id: id('env'), value: f.env, code: true, rows: 3, span: 12, placeholder: 'KEY=value', help: 'One KEY=value per line.' })}
-          ${textarea({ label: 'Secret env vars', name: 'secretEnv', id: id('secretEnv'), value: '', code: true, rows: 3, span: 12, placeholder: 'API_KEY=…', help: 'Write-only: they can never be read back. Not kept if the form has an error.' })}
-        </div>
-        ${checkbox('Deploy right away', 'deploy', f.deploy === undefined || checked(f.deploy))}
-        <div class="form-actions">
-          <button class="btn btn-primary" type="submit">${icon('plus', 16)}Create project</button>
-          <a class="btn btn-ghost" href="/" data-drawer-close>Cancel</a>
-        </div>
+        ${kind === k && creating.error ? alert('danger', creating.error, 'The project was not created') : ''}
+        <section class="card" aria-labelledby="${id('project-title')}">
+          <div class="card-head">
+            <h2 class="card-title" id="${id('project-title')}">Project</h2>
+            <p class="card-description">Its name, and the hostname Caddy serves it on.</p>
+          </div>
+          <div class="card-body"><div class="form-grid">
+            ${field({ label: 'Name', name: 'name', id: id('name'), value: f.name, required: true, span: 4, error: e.name, help: 'Lowercase letters, digits and hyphens.' })}
+            ${field({ label: 'Hostname', name: 'hostname', id: id('hostname'), value: f.hostname, span: 8, error: e.hostname, placeholder: `e.g. <name>.${deps.config.baseDomain}`, help: 'Empty: the name on the base domain.' })}
+          </div></div>
+        </section>
+        ${k === 'image'
+          ? html`<section class="card" aria-labelledby="${id('container-title')}">
+              <div class="card-head">
+                <h2 class="card-title" id="${id('container-title')}">Container</h2>
+                <p class="card-description">What it pulls, the port it listens on, and how it is checked.</p>
+              </div>
+              <div class="card-body"><div class="form-grid">
+                ${field({ label: 'Image', name: 'imageRef', id: id('imageRef'), value: f.imageRef, required: true, span: 8, error: e.imageRef, placeholder: 'e.g. registry.example.com/library/app:latest', help: 'Full image reference including tag.' })}
+                ${selectField({ label: 'Registry login', name: 'registryId', id: id('registryId'), value: f.registryId, options: regs, span: 4, error: e.registryId, help: REGISTRY_HELP })}
+                ${field({ label: 'Container port', name: 'containerPort', id: id('containerPort'), value: f.containerPort, type: 'number', required: true, span: 2, error: e.containerPort, placeholder: 'e.g. 8080', attrs: 'min="1" max="65535" inputmode="numeric"' })}
+                ${field({ label: 'Health path', name: 'healthPath', id: id('healthPath'), value: f.healthPath, span: 3, error: e.healthPath, placeholder: 'e.g. /health', help: HEALTH_HELP })}
+                ${field({ label: 'Memory limit', name: 'memLimit', id: id('memLimit'), value: f.memLimit, span: 3, error: e.memLimit, placeholder: 'e.g. 512m', help: MEM_HELP })}
+                ${field({ label: 'Data owner (uid:gid)', name: 'dataOwner', id: id('dataOwner'), value: f.dataOwner, span: 4, error: e.dataOwner, placeholder: 'e.g. 1000:1000', help: OWNER_HELP })}
+              </div></div>
+            </section>`
+          : html`<section class="card" aria-labelledby="${id('compose-title')}">
+              <div class="card-head">
+                <h2 class="card-title" id="${id('compose-title')}">Compose file</h2>
+                <p class="card-description">No privileged settings, ports only on <code class="inline">127.0.0.1</code>, bind mounts only of <code class="inline">./data</code>.</p>
+              </div>
+              <div class="card-body"><div class="form-grid">
+                ${textarea({ label: 'compose.yaml', name: 'composeYaml', id: id('composeYaml'), value: f.composeYaml ?? SAMPLE_COMPOSE, code: true, rows: 16, required: true, span: 12, error: e.composeYaml, help: html`Env vars below reach it as <code class="inline">\${NAME}</code> or with <code class="inline">env_file: .env</code>.` })}
+                ${field({ label: 'Routed service', name: 'routedService', id: id('routedService'), value: f.routedService ?? 'app', required: true, span: 4, error: e.routedService, help: 'The service Caddy sends traffic to.' })}
+                ${field({ label: 'Port', name: 'port', id: id('port'), value: f.port, type: 'number', required: true, span: 4, error: e.port, placeholder: 'e.g. 80', attrs: 'min="1" max="65535" inputmode="numeric"' })}
+                ${field({ label: 'Health path', name: 'healthPath', id: id('healthPath'), value: f.healthPath, span: 4, error: e.healthPath, placeholder: 'e.g. /health', help: HEALTH_HELP })}
+              </div></div>
+            </section>`}
+        <section class="card" aria-labelledby="${id('env-title')}">
+          <div class="card-head">
+            <h2 class="card-title" id="${id('env-title')}">Env vars</h2>
+            <p class="card-description">Optional. You can change them later on the Env tab.</p>
+          </div>
+          <div class="card-body"><div class="form-grid">
+            ${textarea({ label: 'Env vars', name: 'env', id: id('env'), value: f.env, code: true, rows: 5, span: 6, placeholder: 'KEY=value', help: 'One KEY=value per line.' })}
+            ${textarea({ label: 'Secret env vars', name: 'secretEnv', id: id('secretEnv'), value: '', code: true, rows: 5, span: 6, placeholder: 'API_KEY=…', help: 'Write-only: they can never be read back. Not kept if the form has an error.' })}
+          </div></div>
+          <div class="card-footer">
+            <button class="btn btn-primary" type="submit">${icon('plus', 16)}Create project</button>
+            <a class="btn btn-ghost" href="/">Cancel</a>
+            ${checkbox('Deploy right away', 'deploy', f.deploy === undefined || checked(f.deploy))}
+          </div>
+        </section>
       </form>`;
     };
-    return drawer({
-      id: 'new-project',
+    return view.render(c, {
       title: 'New project',
-      wide: true,
-      open: Boolean(creating),
-      closeHref: '/',
+      nav: 'projects',
+      status: creating.error ? 400 : 200,
+      crumbs: [{ label: 'Projects', href: '/' }, { label: 'New project' }],
       body: html`
-        <div class="segmented" role="group" aria-label="What the app ships as">
-          <a href="/projects/new?kind=image" data-kind-switch="image" aria-current="${kind === 'image' ? 'true' : 'false'}">Image</a>
-          <a href="/projects/new?kind=compose" data-kind-switch="compose" aria-current="${kind === 'compose' ? 'true' : 'false'}">Compose</a>
+        ${pageHeader('New project', 'Ship a container image or a compose file. Agents can create projects too, over MCP.')}
+        <div class="kind-options" role="group" aria-label="What the app ships as">
+          ${KINDS.map(([k, label, desc]) => html`<a class="kind-option" href="/projects/new?kind=${k}" data-kind-switch="${k}" aria-current="${k === kind ? 'true' : 'false'}">
+            <span class="kind-option-radio" aria-hidden="true"></span>
+            <span class="kind-option-title">${label}</span>
+            <span class="kind-option-desc">${desc}</span>
+          </a>`)}
         </div>
-        <p class="form-note mt-0" data-kind-panel="image"${kind === 'image' ? '' : raw(' hidden')}>One container image from a registry, deployed by digest. CI pushes the image and posts the digest to the project's webhook.</p>
-        <p class="form-note mt-0" data-kind-panel="compose"${kind === 'compose' ? '' : raw(' hidden')}>A docker compose file with one routed service and any helpers (a database, a worker), checked against an allowlist.</p>
         ${panel('image')}
         ${panel('compose')}`,
     });
   };
 
   app.get('/', (c) => dashboard(c));
-  // A direct link to the drawer, and where it goes without JS.
-  app.get('/projects/new', (c) => dashboard(c, { kind: c.req.query('kind') === 'compose' ? 'compose' : 'image', form: {} }));
+  app.get('/projects/new', (c) => newProject(c, { kind: c.req.query('kind') === 'compose' ? 'compose' : 'image', form: {} }));
 
   app.post('/projects/new', async (c) => {
     const f = await readForm(c);
@@ -250,7 +284,7 @@ export function projectPages(deps: { config: Config; services: Services; view: V
       }
       return view.redirect(c, base(project), 'success', `Created ${project.name}. Deploy it when you are ready.`);
     } catch (err) {
-      return dashboard(c, { kind, form: f, error: message(err), errors: fieldErrors(err) });
+      return newProject(c, { kind, form: f, error: message(err), errors: fieldErrors(err) });
     }
   });
 

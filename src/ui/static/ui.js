@@ -272,11 +272,12 @@
     }
   });
 
-  // Segmented control: <a data-kind-switch="image"> shows [data-kind-panel="image"].
+  // Kind cards: <a data-kind-switch="image"> shows [data-kind-panel="image"] and keeps ?kind= in the URL.
   for (const link of document.querySelectorAll('[data-kind-switch]')) {
     link.addEventListener('click', (e) => {
       e.preventDefault();
       const kind = link.dataset.kindSwitch;
+      history.replaceState(null, '', link.getAttribute('href'));
       for (const l of document.querySelectorAll('[data-kind-switch]')) l.setAttribute('aria-current', String(l === link));
       for (const p of document.querySelectorAll('[data-kind-panel]')) p.hidden = p.dataset.kindPanel !== kind;
       document.querySelector('[data-kind-panel="' + kind + '"] input:not([type="hidden"])')?.focus();

@@ -118,7 +118,6 @@ export class View {
     const flash = this.#takeFlash(c);
     const parents = (opts.crumbs ?? []).slice(0, -1);
     const collapsed = getCookie(c, SIDEBAR_COOKIE) === 'collapsed';
-    const mcpUrl = `${this.#config.publicUrl}/mcp`;
     c.header('Content-Security-Policy', CSP);
     c.header('X-Content-Type-Options', 'nosniff');
     c.header('Referrer-Policy', 'same-origin');
@@ -155,10 +154,6 @@ export class View {
           ? html`<aside class="sidebar" aria-label="Primary">
               ${NAV.map((n) => navItem(n.href, n.label, n.icon, n.key === opts.nav))}
               <div class="sidebar-footer">
-                <span class="tooltip-wrap">
-                  <button class="nav-item" type="button" data-copy-text="${mcpUrl}" aria-label="Connect MCP: copy the MCP URL, ${mcpUrl}" title="Copies ${mcpUrl}">${icon('mcp', 18)}<span class="nav-label">Connect MCP</span></button>
-                  <span class="tooltip tooltip-right" aria-hidden="true">Copy the MCP URL · ${mcpUrl}</span>
-                </span>
                 <span class="tooltip-wrap sidebar-toggle">
                   <button class="nav-item" type="button" data-sidebar-toggle aria-expanded="${collapsed ? 'false' : 'true'}" aria-label="${collapsed ? 'Show labels' : 'Hide labels'}">${icon('chevron', 16)}<span class="nav-label">Hide labels</span></button>
                   <span class="tooltip tooltip-right" aria-hidden="true">Show labels</span>
@@ -207,7 +202,10 @@ export function initials(email: string): string {
   return (email.trim()[0] ?? '?').toUpperCase();
 }
 
-/** Log out. */
+/** Log out: an icon button, named by its aria-label and a tooltip. */
 function account(): Html {
-  return html`<form class="account" method="post" action="/auth/logout"><button class="btn btn-secondary btn-sm" type="submit">${icon('logout', 16)}Log out</button></form>`;
+  return html`<form class="account" method="post" action="/auth/logout"><span class="tooltip-wrap">
+    <button class="btn btn-secondary btn-sm btn-square" type="submit" aria-label="Log out">${icon('logout', 16)}</button>
+    <span class="tooltip tooltip-below-end" aria-hidden="true">Log out</span>
+  </span></form>`;
 }
