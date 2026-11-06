@@ -148,7 +148,7 @@ export class View {
               }`)}</nav>`
             : ''}
         </div>
-        <div class="topbar-right">${user ? account(user.email) : ''}</div>
+        <div class="topbar-right">${user ? account() : ''}</div>
       </header>
       <div class="shell-body">
         ${user
@@ -207,10 +207,7 @@ export function initials(email: string): string {
   return (email.trim()[0] ?? '?').toUpperCase();
 }
 
-/** The signed-in email, then Log out. */
-function account(email: string): Html {
-  return html`<div class="account">
-    <span class="account-email" title="Signed in as ${email}">${email}</span>
-    <form method="post" action="/auth/logout"><button class="btn btn-secondary btn-sm" type="submit">${icon('logout', 16)}Log out</button></form>
-  </div>`;
+/** Log out. */
+function account(): Html {
+  return html`<form class="account" method="post" action="/auth/logout"><button class="btn btn-secondary btn-sm" type="submit">${icon('logout', 16)}Log out</button></form>`;
 }

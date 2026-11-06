@@ -308,10 +308,8 @@ a.topbar-brand:hover { color: var(--ink); text-decoration: none; }
 .breadcrumb a:hover { color: var(--ink); }
 .breadcrumb-sep { color: var(--border-control); }
 
-/* ——— Account: the signed-in email, then Log out ——— */
-.account { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
-.account form { margin: 0; }
-.account-email { font-family: var(--font-mono); font-size: 13px; color: var(--text-muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* ——— Account: Log out ——— */
+.account { margin: 0; }
 .avatar {
   width: 30px;
   height: 30px;
@@ -598,6 +596,17 @@ a.nav-item:hover { text-decoration: none; }
 /* Inputs hold machine values by default (mono); .input-ui is for words: a search, a note, a name. */
 .input-ui, .select { font-family: var(--font-ui); font-size: var(--text-md); }
 .input:hover, .select:hover, .textarea:hover { border-color: var(--text-muted); }
+/* Our own chevron, inset 14px from the edge (the native one sits against the border). */
+.select {
+  appearance: none;
+  padding-right: 40px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%235E5750' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+  background-size: 16px;
+  cursor: pointer;
+}
+.select[multiple] { height: auto; padding-right: var(--space-3); background-image: none; }
 .input:focus-visible, .select:focus-visible, .textarea:focus-visible { border-color: var(--ink); outline: 2px solid var(--ink); outline-offset: 1px; }
 .input::placeholder, .textarea::placeholder { color: var(--text-placeholder); font-style: italic; opacity: 1; }
 .input[aria-invalid="true"], .select[aria-invalid="true"], .textarea[aria-invalid="true"] { border: var(--border-width-strong) solid var(--danger-dot); }
@@ -1514,9 +1523,6 @@ button.tab { border: none; border-bottom: 2.5px solid transparent; background: t
   .breadcrumb { flex: 1 1 auto; gap: 6px; white-space: nowrap; overflow: hidden; font-size: var(--text-md); }
   .breadcrumb > :nth-last-child(n + 3) { display: none; }
   .breadcrumb > a { min-width: 2ch; overflow: hidden; text-overflow: ellipsis; }
-  .topbar-right { flex-shrink: 1; min-width: 0; }
-  .account { gap: var(--space-2); }
-  .account-email { font-size: 12px; }
 
   /* The sidebar becomes a bottom tab bar of icons. */
   .sidebar,
